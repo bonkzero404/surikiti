@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"surikiti/loadbalancer"
-
 	"github.com/panjf2000/gnet/v2"
 	"go.uber.org/zap"
+
+	"surikiti/loadbalancer"
 )
 
 type ProxyServer struct {
@@ -43,14 +43,22 @@ func (ps *ProxyServer) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 
 func (ps *ProxyServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	if err != nil {
-		// EOF is normal when client closes connection gracefully
-		if err.Error() == "EOF" || strings.Contains(err.Error(), "read: EOF") {
-			ps.logger.Debug("Connection closed by client", zap.String("remote", c.RemoteAddr().String()))
+		// These errors are normal when client closes connection
+		errorMsg := err.Error()
+		if errorMsg == "EOF" ||
+			strings.Contains(errorMsg, "read: EOF") ||
+			strings.Contains(errorMsg, "connection reset by peer") ||
+			strings.Contains(errorMsg, "broken pipe") {
+			ps.logger.Debug("Connection closed by client",
+				zap.String("remote", c.RemoteAddr().String()),
+				zap.String("reason", errorMsg))
 		} else {
-			ps.logger.Error("Connection closed with error", zap.Error(err))
+			ps.logger.Error("Connection closed with unexpected error",
+				zap.Error(err),
+				zap.String("remote", c.RemoteAddr().String()))
 		}
 	} else {
-		ps.logger.Debug("Connection closed", zap.String("remote", c.RemoteAddr().String()))
+		ps.logger.Debug("Connection closed gracefully", zap.String("remote", c.RemoteAddr().String()))
 	}
 	return gnet.None
 }
