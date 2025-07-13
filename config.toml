@@ -1,0 +1,31 @@
+[server]
+port = 8090
+host = "0.0.0.0"
+
+# Upstream servers configuration
+[[upstreams]]
+name = "backend1"
+url = "http://localhost:3001"
+weight = 1
+health_check = "/health"
+
+[[upstreams]]
+name = "backend2"
+url = "http://localhost:3002"
+weight = 1
+health_check = "/health"
+
+[[upstreams]]
+name = "backend3"
+url = "http://localhost:3003"
+weight = 2
+health_check = "/health"
+
+[load_balancer]
+method = "round_robin"  # round_robin, weighted_round_robin, least_connections
+timeout = "30s"
+max_retries = 3
+
+[logging]
+level = "info"
+file = "proxy.log"
