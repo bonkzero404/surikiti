@@ -4,13 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
+	"github.com/valyala/fasthttp"
 	"go.uber.org/zap"
 
 	"surikiti/config"
@@ -20,37 +19,43 @@ import (
 type ProxyServer struct {
 	loadBalancer *loadbalancer.LoadBalancer
 	logger       *zap.Logger
-	client       *http.Client
+	client       *fasthttp.Client
 	proxyConfig  config.ProxyConfig
 	corsConfig   config.CORSConfig
 }
 
 func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
-	// Create custom transport with connection pooling
-	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: proxyConfig.KeepAliveTimeout,
-		}).DialContext,
-		MaxIdleConns:        proxyConfig.MaxIdleConns,
-		MaxIdleConnsPerHost: proxyConfig.MaxIdleConnsPerHost,
-		MaxConnsPerHost:     proxyConfig.MaxConnsPerHost,
-		IdleConnTimeout:     proxyConfig.IdleConnTimeout,
-		TLSHandshakeTimeout: 10 * time.Second,
-		DisableKeepAlives:   false, // Enable keep-alive
-		DisableCompression:  !proxyConfig.EnableCompression,
+	// Create fasthttp client optimized for high concurrency
+	client := &fasthttp.Client{
+		ReadTimeout:                   time.Second * 2, // Reduced timeout
+		WriteTimeout:                  time.Second * 2, // Reduced timeout
+		MaxIdleConnDuration:           time.Second * 10, // Increased for connection reuse
+		MaxConnDuration:               time.Minute * 2, // Longer duration for efficiency
+		MaxConnsPerHost:               100, // Increased for high concurrency
+		DisableHeaderNamesNormalizing: false,
+		DisablePathNormalizing:        false,
+		RetryIf: func(request *fasthttp.Request) bool {
+			// Retry on connection errors
+			return true
+		},
+		Dial: (&fasthttp.TCPDialer{
+			Concurrency:      1000, // High concurrency for load testing
+			DNSCacheDuration: time.Minute * 10,
+		}).Dial,
 	}
 
-	return &ProxyServer{
+	ps := &ProxyServer{
 		loadBalancer: lb,
 		logger:       logger,
-		client: &http.Client{
-			Timeout:   proxyConfig.RequestTimeout,
-			Transport: transport,
-		},
-		proxyConfig: proxyConfig,
-		corsConfig:  corsConfig,
+		client:       client,
+		proxyConfig:  proxyConfig,
+		corsConfig:   corsConfig,
 	}
+
+	// Start health check
+	lb.StartHealthCheck()
+
+	return ps
 }
 
 func (ps *ProxyServer) OnBoot(eng gnet.Engine) gnet.Action {
@@ -97,19 +102,22 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	// Read the HTTP request
 	reqData, err := c.Next(-1)
 	if err != nil {
-		ps.logger.Error("Failed to read request data", zap.Error(err))
 		return gnet.Close
 	}
 
-	// Parse HTTP request
-	req, err := ps.parseHTTPRequest(reqData)
-	if err != nil {
-		ps.logger.Error("Failed to parse HTTP request", zap.Error(err))
-		if strings.Contains(err.Error(), "request body too large") {
-			ps.sendErrorResponse(c, http.StatusRequestEntityTooLarge, "Request Entity Too Large")
-		} else {
-			ps.sendErrorResponse(c, http.StatusBadRequest, "Bad Request")
-		}
+	// Parse HTTP request using fasthttp properly
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+
+	// Check max body size first
+	if int64(len(reqData)) > ps.proxyConfig.MaxBodySize {
+		ps.sendErrorResponse(c, fasthttp.StatusRequestEntityTooLarge, "Request Entity Too Large")
+		return gnet.None
+	}
+
+	bufReader := bufio.NewReader(bytes.NewReader(reqData))
+	if err := req.Read(bufReader); err != nil {
+		ps.sendErrorResponse(c, fasthttp.StatusBadRequest, "Bad Request")
 		return gnet.None
 	}
 
@@ -121,8 +129,7 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	// Get upstream server
 	upstream := ps.loadBalancer.GetUpstream()
 	if upstream == nil {
-		ps.logger.Error("No healthy upstream servers available")
-		ps.sendErrorResponse(c, http.StatusServiceUnavailable, "Service Unavailable")
+		ps.sendErrorResponse(c, fasthttp.StatusServiceUnavailable, "Service Unavailable")
 		return gnet.None
 	}
 
@@ -133,48 +140,29 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	// Forward request to upstream
 	resp, err := ps.forwardRequest(req, upstream)
 	if err != nil {
-		ps.logger.Error("Failed to forward request",
-			zap.Error(err),
-			zap.String("upstream", upstream.Name))
-		ps.sendErrorResponse(c, http.StatusBadGateway, "Bad Gateway")
+		ps.sendErrorResponse(c, fasthttp.StatusBadGateway, "Bad Gateway")
 		return gnet.None
 	}
-	defer resp.Body.Close()
+	defer fasthttp.ReleaseResponse(resp)
 
-	// Send response back to client
+	// Send response back to client using fasthttp response writer
 	if err := ps.sendResponse(c, resp); err != nil {
-		ps.logger.Error("Failed to send response", zap.Error(err))
 		return gnet.Close
 	}
-
-	ps.logger.Info("Request proxied successfully",
-		zap.String("method", req.Method),
-		zap.String("path", req.URL.Path),
-		zap.String("upstream", upstream.Name),
-		zap.Int("status", resp.StatusCode))
 
 	return gnet.None
 }
 
-func (ps *ProxyServer) parseHTTPRequest(data []byte) (*http.Request, error) {
-	// Check max body size
-	if int64(len(data)) > ps.proxyConfig.MaxBodySize {
-		return nil, fmt.Errorf("request body too large: %d bytes (max: %d)", len(data), ps.proxyConfig.MaxBodySize)
-	}
 
-	reader := bytes.NewReader(data)
-	bufReader := bufio.NewReader(reader)
-	return http.ReadRequest(bufReader)
-}
 
 // handleCORS adds CORS headers to the response if CORS is enabled
-func (ps *ProxyServer) handleCORS(req *http.Request, c gnet.Conn) bool {
+func (ps *ProxyServer) handleCORS(req *fasthttp.Request, c gnet.Conn) bool {
 	if !ps.corsConfig.Enabled {
 		return false
 	}
 
-	origin := req.Header.Get("Origin")
-	method := req.Method
+	origin := string(req.Header.Peek("Origin"))
+	method := string(req.Header.Method())
 
 	// Check if origin is allowed
 	allowedOrigin := "*"
@@ -192,96 +180,129 @@ func (ps *ProxyServer) handleCORS(req *http.Request, c gnet.Conn) bool {
 		}
 	}
 
-	// Handle preflight request
+	// Handle preflight request using fasthttp response
 	if method == "OPTIONS" {
-		var response strings.Builder
-		response.WriteString("HTTP/1.1 200 OK\r\n")
-		response.WriteString(fmt.Sprintf("Access-Control-Allow-Origin: %s\r\n", allowedOrigin))
-		response.WriteString(fmt.Sprintf("Access-Control-Allow-Methods: %s\r\n", strings.Join(ps.corsConfig.AllowedMethods, ", ")))
-		response.WriteString(fmt.Sprintf("Access-Control-Allow-Headers: %s\r\n", strings.Join(ps.corsConfig.AllowedHeaders, ", ")))
-		if ps.corsConfig.AllowCredentials {
-			response.WriteString("Access-Control-Allow-Credentials: true\r\n")
-		}
-		response.WriteString(fmt.Sprintf("Access-Control-Max-Age: %d\r\n", ps.corsConfig.MaxAge))
-		response.WriteString("Content-Length: 0\r\n")
-		response.WriteString("\r\n")
+		resp := fasthttp.AcquireResponse()
+		defer fasthttp.ReleaseResponse(resp)
 
-		c.Write([]byte(response.String()))
+		resp.SetStatusCode(fasthttp.StatusOK)
+		resp.Header.Set("Access-Control-Allow-Origin", allowedOrigin)
+		resp.Header.Set("Access-Control-Allow-Methods", strings.Join(ps.corsConfig.AllowedMethods, ", "))
+		resp.Header.Set("Access-Control-Allow-Headers", strings.Join(ps.corsConfig.AllowedHeaders, ", "))
+		if ps.corsConfig.AllowCredentials {
+			resp.Header.Set("Access-Control-Allow-Credentials", "true")
+		}
+		resp.Header.Set("Access-Control-Max-Age", strconv.Itoa(ps.corsConfig.MaxAge))
+		resp.Header.Set("Content-Length", "0")
+
+		// Write response using fasthttp
+		ps.writeResponse(c, resp)
 		return true
 	}
 
 	return false
 }
 
-func (ps *ProxyServer) forwardRequest(req *http.Request, upstream *loadbalancer.Upstream) (*http.Response, error) {
-	// Create new request URL with upstream host
-	targetURL := upstream.URL.ResolveReference(req.URL)
+func (ps *ProxyServer) forwardRequest(req *fasthttp.Request, upstream *loadbalancer.Upstream) (*fasthttp.Response, error) {
+	// Create fasthttp response
+	fastResp := fasthttp.AcquireResponse()
 
-	// Create new request
-	newReq, err := http.NewRequest(req.Method, targetURL.String(), req.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create new request: %w", err)
-	}
-
-	// Copy headers
-	for name, values := range req.Header {
-		for _, value := range values {
-			newReq.Header.Add(name, value)
-		}
-	}
+	// Build target URL
+	originalURI := req.RequestURI()
+	targetURI := upstream.URL.String() + string(originalURI)
+	req.SetRequestURI(targetURI)
 
 	// Add proxy headers
-	newReq.Header.Set("X-Forwarded-For", req.RemoteAddr)
-	newReq.Header.Set("X-Forwarded-Proto", "http")
-	newReq.Header.Set("X-Forwarded-Host", req.Host)
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Forwarded-Host", string(req.Header.Host()))
+	req.Header.Set("X-Real-IP", "127.0.0.1")
 
-	// Execute request
-	return ps.client.Do(newReq)
+	// Keep connection alive for better performance
+	req.Header.Set("Connection", "keep-alive")
+
+	// Execute request with minimal retry logic for performance
+	maxRetries := 2
+	var err error
+	for i := 0; i < maxRetries; i++ {
+		err = ps.client.Do(req, fastResp)
+		if err == nil {
+			return fastResp, nil
+		}
+
+		// Mark upstream as unhealthy on persistent errors
+		if i == maxRetries-1 {
+			ps.loadBalancer.MarkUnhealthy(upstream)
+		}
+
+		// Minimal delay before retry
+		time.Sleep(time.Millisecond * 10)
+	}
+
+	fasthttp.ReleaseResponse(fastResp)
+	return nil, fmt.Errorf("failed to execute request after %d retries: %w", maxRetries, err)
 }
 
-func (ps *ProxyServer) sendResponse(c gnet.Conn, resp *http.Response) error {
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	// Build HTTP response
-	var response strings.Builder
-	response.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode, resp.Status))
-
+func (ps *ProxyServer) sendResponse(c gnet.Conn, resp *fasthttp.Response) error {
 	// Add CORS headers if enabled
 	if ps.corsConfig.Enabled {
-		response.WriteString("Access-Control-Allow-Origin: *\r\n")
+		resp.Header.Set("Access-Control-Allow-Origin", "*")
 		if len(ps.corsConfig.ExposedHeaders) > 0 {
-			response.WriteString(fmt.Sprintf("Access-Control-Expose-Headers: %s\r\n", strings.Join(ps.corsConfig.ExposedHeaders, ", ")))
+			resp.Header.Set("Access-Control-Expose-Headers", strings.Join(ps.corsConfig.ExposedHeaders, ", "))
 		}
 		if ps.corsConfig.AllowCredentials {
-			response.WriteString("Access-Control-Allow-Credentials: true\r\n")
+			resp.Header.Set("Access-Control-Allow-Credentials", "true")
 		}
 	}
 
-	// Copy headers
-	for name, values := range resp.Header {
-		for _, value := range values {
-			response.WriteString(fmt.Sprintf("%s: %s\r\n", name, value))
+	return ps.writeResponse(c, resp)
+}
+
+// writeResponse efficiently writes fasthttp response to gnet connection
+func (ps *ProxyServer) writeResponse(c gnet.Conn, resp *fasthttp.Response) error {
+	// Pre-allocate buffer with larger estimated size for better performance
+	body := resp.Body()
+	estimatedSize := 1024 + len(body) // Larger header estimate + body
+	buf := make([]byte, 0, estimatedSize)
+	
+	// Status line
+	buf = append(buf, fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode(), fasthttp.StatusMessage(resp.StatusCode()))...)
+	
+	// Keep connection alive for better performance
+	buf = append(buf, "Connection: keep-alive\r\n"...)
+	
+	// Headers
+	resp.Header.VisitAll(func(key, value []byte) {
+		// Skip connection header to avoid conflicts
+		if !bytes.EqualFold(key, []byte("connection")) {
+			buf = append(buf, key...)
+			buf = append(buf, ": "...)
+			buf = append(buf, value...)
+			buf = append(buf, "\r\n"...)
 		}
+	})
+	
+	// Content-Length if not present
+	if len(resp.Header.Peek("Content-Length")) == 0 {
+		buf = append(buf, fmt.Sprintf("Content-Length: %d\r\n", len(body))...)
 	}
+	
+	// End of headers
+	buf = append(buf, "\r\n"...)
+	
+	// Body
+	buf = append(buf, body...)
 
-	// Add content length if not present
-	if resp.Header.Get("Content-Length") == "" {
-		response.WriteString(fmt.Sprintf("Content-Length: %d\r\n", len(body)))
-	}
-
-	response.WriteString("\r\n")
-	response.WriteString(string(body))
-
-	_, err = c.Write([]byte(response.String()))
+	_, err := c.Write(buf)
 	return err
 }
 
 func (ps *ProxyServer) sendErrorResponse(c gnet.Conn, statusCode int, message string) {
-	response := fmt.Sprintf("HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-		statusCode, message, len(message), message)
-	_, _ = c.Write([]byte(response))
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	resp.SetStatusCode(statusCode)
+	resp.Header.Set("Content-Type", "text/plain")
+	resp.SetBodyString(message)
+
+	ps.writeResponse(c, resp)
 }

@@ -78,6 +78,11 @@ func main() {
 			gnet.WithReusePort(true),
 			gnet.WithTCPKeepAlive(time.Minute*2),
 			gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+			gnet.WithSocketRecvBuffer(64*1024), // 64KB receive buffer
+			gnet.WithSocketSendBuffer(64*1024), // 64KB send buffer
+			gnet.WithReadBufferCap(16*1024),    // 16KB read buffer per connection
+			gnet.WithWriteBufferCap(16*1024),   // 16KB write buffer per connection
+			gnet.WithLockOSThread(true),        // Lock OS threads for better performance
 		); err != nil {
 			logger.Fatal("Failed to start gnet server", zap.Error(err))
 		}
