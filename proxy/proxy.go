@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/panjf2000/gnet/v2"
 	"go.uber.org/zap"
 
+	"surikiti/config"
 	"surikiti/loadbalancer"
 )
 
@@ -19,15 +21,35 @@ type ProxyServer struct {
 	loadBalancer *loadbalancer.LoadBalancer
 	logger       *zap.Logger
 	client       *http.Client
+	proxyConfig  config.ProxyConfig
+	corsConfig   config.CORSConfig
 }
 
-func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, timeout time.Duration) *ProxyServer {
+func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
+	// Create custom transport with connection pooling
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: proxyConfig.KeepAliveTimeout,
+		}).DialContext,
+		MaxIdleConns:        proxyConfig.MaxIdleConns,
+		MaxIdleConnsPerHost: proxyConfig.MaxIdleConnsPerHost,
+		MaxConnsPerHost:     proxyConfig.MaxConnsPerHost,
+		IdleConnTimeout:     proxyConfig.IdleConnTimeout,
+		TLSHandshakeTimeout: 10 * time.Second,
+		DisableKeepAlives:   false, // Enable keep-alive
+		DisableCompression:  !proxyConfig.EnableCompression,
+	}
+
 	return &ProxyServer{
 		loadBalancer: lb,
 		logger:       logger,
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   proxyConfig.RequestTimeout,
+			Transport: transport,
 		},
+		proxyConfig: proxyConfig,
+		corsConfig:  corsConfig,
 	}
 }
 
@@ -83,7 +105,16 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	req, err := ps.parseHTTPRequest(reqData)
 	if err != nil {
 		ps.logger.Error("Failed to parse HTTP request", zap.Error(err))
-		ps.sendErrorResponse(c, http.StatusBadRequest, "Bad Request")
+		if strings.Contains(err.Error(), "request body too large") {
+			ps.sendErrorResponse(c, http.StatusRequestEntityTooLarge, "Request Entity Too Large")
+		} else {
+			ps.sendErrorResponse(c, http.StatusBadRequest, "Bad Request")
+		}
+		return gnet.None
+	}
+
+	// Handle CORS preflight requests
+	if ps.handleCORS(req, c) {
 		return gnet.None
 	}
 
@@ -126,9 +157,60 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 }
 
 func (ps *ProxyServer) parseHTTPRequest(data []byte) (*http.Request, error) {
+	// Check max body size
+	if int64(len(data)) > ps.proxyConfig.MaxBodySize {
+		return nil, fmt.Errorf("request body too large: %d bytes (max: %d)", len(data), ps.proxyConfig.MaxBodySize)
+	}
+
 	reader := bytes.NewReader(data)
 	bufReader := bufio.NewReader(reader)
 	return http.ReadRequest(bufReader)
+}
+
+// handleCORS adds CORS headers to the response if CORS is enabled
+func (ps *ProxyServer) handleCORS(req *http.Request, c gnet.Conn) bool {
+	if !ps.corsConfig.Enabled {
+		return false
+	}
+
+	origin := req.Header.Get("Origin")
+	method := req.Method
+
+	// Check if origin is allowed
+	allowedOrigin := "*"
+	if len(ps.corsConfig.AllowedOrigins) > 0 && ps.corsConfig.AllowedOrigins[0] != "*" {
+		originAllowed := false
+		for _, allowedOrig := range ps.corsConfig.AllowedOrigins {
+			if allowedOrig == origin {
+				allowedOrigin = origin
+				originAllowed = true
+				break
+			}
+		}
+		if !originAllowed {
+			return false
+		}
+	}
+
+	// Handle preflight request
+	if method == "OPTIONS" {
+		var response strings.Builder
+		response.WriteString("HTTP/1.1 200 OK\r\n")
+		response.WriteString(fmt.Sprintf("Access-Control-Allow-Origin: %s\r\n", allowedOrigin))
+		response.WriteString(fmt.Sprintf("Access-Control-Allow-Methods: %s\r\n", strings.Join(ps.corsConfig.AllowedMethods, ", ")))
+		response.WriteString(fmt.Sprintf("Access-Control-Allow-Headers: %s\r\n", strings.Join(ps.corsConfig.AllowedHeaders, ", ")))
+		if ps.corsConfig.AllowCredentials {
+			response.WriteString("Access-Control-Allow-Credentials: true\r\n")
+		}
+		response.WriteString(fmt.Sprintf("Access-Control-Max-Age: %d\r\n", ps.corsConfig.MaxAge))
+		response.WriteString("Content-Length: 0\r\n")
+		response.WriteString("\r\n")
+
+		c.Write([]byte(response.String()))
+		return true
+	}
+
+	return false
 }
 
 func (ps *ProxyServer) forwardRequest(req *http.Request, upstream *loadbalancer.Upstream) (*http.Response, error) {
@@ -167,6 +249,17 @@ func (ps *ProxyServer) sendResponse(c gnet.Conn, resp *http.Response) error {
 	// Build HTTP response
 	var response strings.Builder
 	response.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode, resp.Status))
+
+	// Add CORS headers if enabled
+	if ps.corsConfig.Enabled {
+		response.WriteString("Access-Control-Allow-Origin: *\r\n")
+		if len(ps.corsConfig.ExposedHeaders) > 0 {
+			response.WriteString(fmt.Sprintf("Access-Control-Expose-Headers: %s\r\n", strings.Join(ps.corsConfig.ExposedHeaders, ", ")))
+		}
+		if ps.corsConfig.AllowCredentials {
+			response.WriteString("Access-Control-Allow-Credentials: true\r\n")
+		}
+	}
 
 	// Copy headers
 	for name, values := range resp.Header {

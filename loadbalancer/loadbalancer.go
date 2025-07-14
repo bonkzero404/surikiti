@@ -78,6 +78,8 @@ func (lb *LoadBalancer) GetUpstream() *Upstream {
 		return lb.weightedRoundRobin(healthyUpstreams)
 	case "least_connections":
 		return lb.leastConnections(healthyUpstreams)
+	case "single":
+		return lb.single(healthyUpstreams)
 	default:
 		return lb.roundRobin(healthyUpstreams)
 	}
@@ -124,6 +126,14 @@ func (lb *LoadBalancer) leastConnections(upstreams []*Upstream) *Upstream {
 	}
 
 	return selected
+}
+
+func (lb *LoadBalancer) single(upstreams []*Upstream) *Upstream {
+	// Always return the first healthy upstream (single mode)
+	if len(upstreams) > 0 {
+		return upstreams[0]
+	}
+	return nil
 }
 
 func (lb *LoadBalancer) IncreaseConnections(upstream *Upstream) {

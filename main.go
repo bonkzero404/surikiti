@@ -51,7 +51,7 @@ func main() {
 	logger.Info("Health check started for upstream servers")
 
 	// Create proxy server
-	proxyServer := proxy.NewProxyServer(lb, logger, cfg.LoadBalancer.Timeout)
+	proxyServer := proxy.NewProxyServer(lb, logger, cfg.Proxy, cfg.CORS)
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
