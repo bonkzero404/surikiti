@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -166,12 +167,9 @@ func (ps *ProxyServer) handleCORS(req *fasthttp.Request, c gnet.Conn) bool {
 	allowedOrigin := "*"
 	if len(ps.corsConfig.AllowedOrigins) > 0 && ps.corsConfig.AllowedOrigins[0] != "*" {
 		originAllowed := false
-		for _, allowedOrig := range ps.corsConfig.AllowedOrigins {
-			if allowedOrig == origin {
-				allowedOrigin = origin
-				originAllowed = true
-				break
-			}
+		if slices.Contains(ps.corsConfig.AllowedOrigins, origin) {
+			allowedOrigin = origin
+			originAllowed = true
 		}
 		if !originAllowed {
 			return false
