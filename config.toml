@@ -1,8 +1,6 @@
 [server]
 port = 8086
 host = "0.0.0.0"
-# WebSocket port - can be the same as 'port' to use single port for both HTTP and WebSocket
-# Note: Using same port is experimental and may have limitations with gnet
 websocket_port = 8088
 
 # HTTP Upstream servers configuration
