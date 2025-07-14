@@ -14,7 +14,6 @@
 - [Load Balancing](#load-balancing)
 - [Health Checks](#health-checks)
 - [CORS Support](#cors-support)
-- [Monitoring](#monitoring)
 
 | **HTTP/2 Server** | Go net/http | HTTP/2 with TLS support | 8443 |
 | **HTTP/3 Server** | quic-go | HTTP/3 over QUIC protocol | 8443 |
