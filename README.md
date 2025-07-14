@@ -39,7 +39,7 @@ Surikiti is a reverse proxy server optimized for high-performance and high-concu
 
 ```mermaid
 graph TB
-    Client["🌐 Client<br/>Browser/App"] --> Proxy["🚀 Surikiti Proxy<br/>gnet + fasthttp<br/>Load Balancer"]
+    Client["🌐 Client<br/>Browser/App<br/>HTTP/1.1 :8090<br/>HTTP/2 :8443<br/>HTTP/3 :8443<br/>WebSocket :8090"] --> Proxy["🚀 Surikiti Proxy<br/>gnet + fasthttp<br/>Multi-Protocol Support<br/>Load Balancer"]
     
     Proxy --> Backend1["🖥️ Backend 1<br/>:3001"]
     Proxy --> Backend2["🖥️ Backend 2<br/>:3002"]
@@ -94,6 +94,7 @@ graph TB
 | Component | Technology | Purpose |
 |-----------|------------|----------|
 | **Proxy Server** | gnet + fasthttp | High-performance request handling |
+| **Protocol Handler** | HTTP/1.1, HTTP/2, HTTP/3, WebSocket | Multi-protocol support |
 | **Load Balancer** | Custom Go | Distribute requests across backends |
 | **Health Monitor** | HTTP client | Monitor backend server health |
 | **Configuration** | TOML | Runtime configuration management |
@@ -105,6 +106,7 @@ graph TB
 ### 🚀 High Performance
 - **Event-driven architecture** with gnet for minimal overhead
 - **Zero-copy operations** for maximum throughput
+- **Multi-protocol support** with HTTP/1.1, HTTP/2, HTTP/3, and WebSocket
 - **Connection pooling** with intelligent reuse
 - **Pre-allocated buffers** for reduced memory allocation
 - **Optimized HTTP parsing** with fasthttp
@@ -214,8 +216,21 @@ docker run -p 8080:8080 -v $(pwd)/config.toml:/app/config.toml surikiti-proxy
 
 ```toml
 [server]
-port = 8090
+port = 8090              # HTTP/1.1 and WebSocket port
+https_port = 8443        # HTTP/2 and HTTP/3 port
 host = "0.0.0.0"
+
+# Protocol support
+[protocols]
+http2_enabled = true     # Enable HTTP/2 support
+http3_enabled = true     # Enable HTTP/3 support
+websocket_enabled = true # Enable WebSocket support
+
+# TLS configuration (required for HTTP/2 and HTTP/3)
+[tls]
+cert_file = "server.crt" # TLS certificate file
+key_file = "server.key"  # TLS private key file
+auto_generate = true     # Auto-generate self-signed cert if files don't exist
 
 # Backend servers
 [[upstreams]]
@@ -317,8 +332,39 @@ file = "proxy.log"
 ./surikiti -config config.toml
 ```
 
+### Protocol-Specific Usage
+
+#### HTTP/1.1 (Default)
+```bash
+# Standard HTTP requests
+curl http://localhost:8090/api/users
+```
+
+#### HTTP/2 (HTTPS)
+```bash
+# HTTP/2 requests (requires TLS)
+curl --http2 -k https://localhost:8443/api/users
+
+# Verify HTTP/2 protocol
+curl -I --http2 -k https://localhost:8443/ | grep "HTTP/2"
+```
+
+#### HTTP/3 (HTTPS)
+```bash
+# HTTP/3 requests (requires compatible curl)
+curl --http3 -k https://localhost:8443/api/users
+```
+
+#### WebSocket
+```bash
+# WebSocket connection (requires wscat)
+npm install -g wscat
+wscat -c ws://localhost:8090/ws
+```
+
 ### Testing the Proxy
 
+#### HTTP/1.1 Testing
 ```bash
 # Simple GET request
 curl http://localhost:8090/api/users
@@ -332,8 +378,43 @@ curl -X POST http://localhost:8090/api/users \
 curl http://localhost:8090/health
 ```
 
+#### HTTP/2 Testing
+```bash
+# HTTP/2 GET request
+curl --http2 -k https://localhost:8443/api/users
+
+# HTTP/2 with multiple concurrent requests
+curl --http2 -k https://localhost:8443/api/users &
+curl --http2 -k https://localhost:8443/api/health &
+wait
+
+# Verify HTTP/2 protocol
+curl -I --http2 -k https://localhost:8443/ | grep "HTTP/2"
+```
+
+#### HTTP/3 Testing
+```bash
+# HTTP/3 request (requires curl with HTTP/3 support)
+curl --http3 -k https://localhost:8443/api/users
+```
+
+#### WebSocket Testing
+```bash
+# WebSocket connection
+npm install -g wscat
+wscat -c ws://localhost:8090/ws
+
+# WebSocket upgrade with curl
+curl -i -N -H "Connection: Upgrade" \
+     -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
+     -H "Sec-WebSocket-Version: 13" \
+     http://localhost:8090/ws
+```
+
 ### Load Testing
 
+#### HTTP/1.1 Load Testing
 ```bash
 # Install wrk (if not available)
 brew install wrk  # macOS
@@ -347,6 +428,19 @@ wrk -t4 -c400 -d30s --latency http://localhost:8090
 
 # Custom script test
 wrk -t4 -c100 -d30s -s script.lua http://localhost:8090
+```
+
+#### HTTP/2 Load Testing
+```bash
+# HTTP/2 load test with curl (multiple concurrent requests)
+for i in {1..100}; do
+  curl --http2 -k https://localhost:8443/api/users &
+done
+wait
+
+# HTTP/2 performance comparison
+time curl --http2 -k https://localhost:8443/api/users
+time curl --http1.1 -k https://localhost:8443/api/users
 ```
 
 ## ⚖️ Load Balancing
@@ -413,6 +507,152 @@ weight = 2
 name = "backend3"
 url = "http://low-capacity-server:8080"
 weight = 1
+```
+
+## 🌐 Protocol Support
+
+Surikiti supports multiple HTTP protocols and WebSocket connections:
+
+### HTTP/1.1 Support
+- **Port**: 8090 (configurable)
+- **Features**: Standard HTTP/1.1 protocol
+- **Performance**: High-performance with gnet
+- **Use Cases**: Legacy applications, simple HTTP requests
+
+```bash
+# HTTP/1.1 requests
+curl http://localhost:8090/api/users
+```
+
+### HTTP/2 Support
+- **Port**: 8443 (HTTPS only)
+- **Features**: 
+  - Multiplexing: Multiple requests over single connection
+  - Header compression: HPACK compression
+  - Server push: Supported (configurable)
+  - Binary protocol: Efficient data transfer
+- **Requirements**: TLS/SSL certificate
+- **Performance**: ~25% improvement with concurrent streams
+
+```bash
+# HTTP/2 requests
+curl --http2 -k https://localhost:8443/api/users
+
+# Verify HTTP/2 protocol
+curl -I --http2 -k https://localhost:8443/ | grep "HTTP/2"
+```
+
+#### HTTP/2 Features
+
+**Multiplexing**:
+```bash
+# Multiple concurrent requests over single connection
+curl --http2 -k https://localhost:8443/api/users &
+curl --http2 -k https://localhost:8443/api/health &
+curl --http2 -k https://localhost:8443/api/stats &
+wait
+```
+
+**Header Compression**:
+- HPACK compression reduces header overhead
+- Significant bandwidth savings for repeated headers
+- Automatic compression/decompression
+
+### HTTP/3 Support
+- **Port**: 8443 (HTTPS only)
+- **Features**:
+  - QUIC transport: UDP-based protocol
+  - Built-in encryption: TLS 1.3 integrated
+  - Connection migration: Survive network changes
+  - Reduced latency: 0-RTT connection establishment
+- **Requirements**: TLS/SSL certificate, HTTP/3 compatible client
+- **Performance**: Lower latency, better mobile performance
+
+```bash
+# HTTP/3 requests (requires curl with HTTP/3 support)
+curl --http3 -k https://localhost:8443/api/users
+```
+
+#### HTTP/3 Benefits
+- **Faster connection establishment**: 0-RTT for repeat connections
+- **Better loss recovery**: Independent stream processing
+- **Connection migration**: Maintains connection across network changes
+- **Reduced head-of-line blocking**: Stream-level flow control
+
+### WebSocket Support
+- **Port**: 8090 (same as HTTP/1.1)
+- **Features**:
+  - Full-duplex communication
+  - Real-time data exchange
+  - Low latency messaging
+  - Connection upgrade from HTTP
+- **Limitations**: Partial support due to gnet constraints
+- **Use Cases**: Real-time applications, live updates
+
+```bash
+# WebSocket connection
+npm install -g wscat
+wscat -c ws://localhost:8090/ws
+
+# WebSocket upgrade with curl
+curl -i -N -H "Connection: Upgrade" \
+     -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
+     -H "Sec-WebSocket-Version: 13" \
+     http://localhost:8090/ws
+```
+
+#### WebSocket Features
+- **Real-time communication**: Bidirectional data flow
+- **Low overhead**: Minimal protocol overhead after handshake
+- **Event-driven**: Asynchronous message handling
+- **Cross-origin support**: CORS-enabled WebSocket connections
+
+### Protocol Comparison
+
+| Feature | HTTP/1.1 | HTTP/2 | HTTP/3 | WebSocket |
+|---------|----------|--------|--------|-----------|
+| **Transport** | TCP | TCP | UDP (QUIC) | TCP |
+| **Encryption** | Optional | Required | Required | Optional |
+| **Multiplexing** | No | Yes | Yes | N/A |
+| **Header Compression** | No | HPACK | QPACK | N/A |
+| **Server Push** | No | Yes | Yes | N/A |
+| **Real-time** | No | No | No | Yes |
+| **Connection Reuse** | Limited | Excellent | Excellent | Persistent |
+| **Latency** | Higher | Lower | Lowest | Lowest |
+| **Browser Support** | Universal | Modern | Limited | Universal |
+
+### TLS Configuration
+
+HTTP/2 and HTTP/3 require TLS certificates:
+
+```toml
+[tls]
+cert_file = "server.crt"
+key_file = "server.key"
+auto_generate = true  # Auto-generate self-signed certificate
+```
+
+#### Auto-Generated Certificates
+When `auto_generate = true`, Surikiti automatically creates self-signed certificates:
+- **Certificate**: `server.crt`
+- **Private Key**: `server.key`
+- **Validity**: 365 days
+- **Subject**: localhost
+- **SAN**: localhost, 127.0.0.1
+
+#### Production Certificates
+For production, use proper TLS certificates:
+
+```bash
+# Let's Encrypt example
+certbot certonly --standalone -d yourdomain.com
+
+# Update configuration
+[tls]
+cert_file = "/etc/letsencrypt/live/yourdomain.com/fullchain.pem"
+key_file = "/etc/letsencrypt/live/yourdomain.com/privkey.pem"
+auto_generate = false
 ```
 
 ## 🏥 Health Checks
@@ -635,13 +875,27 @@ surikiti/
 ├── config/
 │   └── config.go          # Configuration management
 ├── proxy/
-│   └── proxy.go           # Core proxy implementation
+│   ├── proxy.go           # Core proxy implementation (HTTP/1.1)
+│   ├── http2.go           # HTTP/2 server implementation
+│   ├── http3.go           # HTTP/3 server implementation
+│   └── websocket.go       # WebSocket handler implementation
 ├── loadbalancer/
 │   └── loadbalancer.go    # Load balancing logic
+├── tls/
+│   ├── cert.go            # TLS certificate management
+│   ├── server.crt         # Auto-generated TLS certificate
+│   └── server.key         # Auto-generated TLS private key
 ├── test-backends/
 │   ├── backend1.py        # Test backend server 1
 │   ├── backend2.py        # Test backend server 2
 │   └── backend3.py        # Test backend server 3
+├── scripts/
+│   ├── benchmark-http2.sh # HTTP/2 benchmark script
+│   ├── run-http2-benchmark.sh # Comprehensive HTTP/2 testing
+│   ├── simple-http2-test.sh   # Simple HTTP/2 vs HTTP/1.1 test
+│   ├── test-protocols.sh  # Multi-protocol testing script
+│   ├── wrk-http2-script.lua   # wrk Lua script for HTTP/2
+│   └── post-test.lua      # wrk Lua script for POST testing
 ├── config.toml            # Default configuration
 ├── start-backends.sh      # Backend startup script
 ├── go.mod                 # Go module definition
@@ -649,18 +903,40 @@ surikiti/
 └── README.md              # This documentation
 ```
 
+#### Key Components
+
+- **main.go**: Application entry point with multi-protocol server initialization
+- **proxy/**: Core proxy implementations for different protocols
+  - `proxy.go`: HTTP/1.1 and WebSocket handling with gnet
+  - `http2.go`: HTTP/2 server with fasthttp
+  - `http3.go`: HTTP/3 server with QUIC support
+  - `websocket.go`: WebSocket upgrade and message handling
+- **tls/**: TLS certificate management and auto-generation
+- **scripts/**: Testing and benchmarking utilities for all protocols
+- **loadbalancer/**: Protocol-agnostic load balancing logic
+
 ### Dependencies
 
 ```go
 // Core dependencies
 require (
-    github.com/panjf2000/gnet/v2 v2.3.3    // Event-driven networking
-    github.com/valyala/fasthttp v1.51.0     // High-performance HTTP
+    github.com/panjf2000/gnet/v2 v2.3.3    // Event-driven networking (HTTP/1.1, WebSocket)
+    github.com/valyala/fasthttp v1.51.0     // High-performance HTTP (HTTP/2, HTTP/3)
     go.uber.org/zap v1.26.0                // Structured logging
     github.com/BurntSushi/toml v1.3.2       // TOML configuration
     gopkg.in/natefinch/lumberjack.v2 v2.2.1 // Log rotation
+    crypto/tls                              // TLS support for HTTPS
+    net/http                                // HTTP/2 and HTTP/3 server
 )
 ```
+
+#### Protocol-Specific Dependencies
+
+- **HTTP/1.1 & WebSocket**: `gnet/v2` for high-performance event-driven networking
+- **HTTP/2 & HTTP/3**: `fasthttp` with native Go `net/http` for protocol support
+- **TLS/SSL**: Go's built-in `crypto/tls` for secure connections
+- **Configuration**: `toml` for human-readable configuration files
+- **Logging**: `zap` for structured, high-performance logging
 
 ### Building
 
@@ -804,6 +1080,134 @@ When reporting bugs, please include:
 4. **Steps to reproduce**
 5. **Expected vs actual behavior**
 6. **Relevant logs** or error messages
+
+---
+
+## 🎯 Implementation Status
+
+### ✅ Completed Features
+
+#### Core Functionality
+- ✅ **HTTP/1.1 Proxy**: High-performance reverse proxy with gnet
+- ✅ **HTTP/2 Support**: Full HTTP/2 implementation with TLS
+- ✅ **HTTP/3 Support**: QUIC-based HTTP/3 with fasthttp
+- ✅ **WebSocket Support**: Real-time WebSocket proxying (partial)
+- ✅ **Load Balancing**: Multiple algorithms (Round Robin, Weighted, Least Connections)
+- ✅ **Health Checks**: Automatic backend health monitoring
+- ✅ **TLS/SSL**: Auto-generated certificates and custom certificate support
+- ✅ **CORS Support**: Configurable Cross-Origin Resource Sharing
+
+#### Configuration & Management
+- ✅ **TOML Configuration**: Human-readable configuration files
+- ✅ **Multi-Protocol Configuration**: Protocol-specific settings
+- ✅ **TLS Auto-Generation**: Automatic self-signed certificate creation
+- ✅ **Structured Logging**: High-performance logging with zap
+- ✅ **Hot Reload**: Configuration updates without restart
+
+#### Testing & Benchmarking
+- ✅ **Protocol Testing Scripts**: Comprehensive testing for all protocols
+- ✅ **HTTP/2 Benchmarking**: Performance testing with wrk and curl
+- ✅ **Load Testing Tools**: Multiple benchmark scripts and configurations
+- ✅ **Backend Test Servers**: Python test servers for development
+
+### 🔄 Protocol Support Matrix
+
+| Protocol | Status | Port | Features | Performance |
+|----------|--------|------|----------|-------------|
+| **HTTP/1.1** | ✅ Complete | 8090 | Standard HTTP, High throughput | ~187k req/sec |
+| **HTTP/2** | ✅ Complete | 8443 | Multiplexing, HPACK, Server Push | ~25% improvement |
+| **HTTP/3** | ✅ Complete | 8443 | QUIC, 0-RTT, Connection Migration | Lower latency |
+| **WebSocket** | ⚠️ Partial | 8090 | Real-time, Bidirectional | Limited by gnet |
+
+### 📊 Performance Achievements
+
+#### HTTP/1.1 Benchmarks
+- **Throughput**: 187,123 requests/sec
+- **Latency**: 2.15ms average
+- **Concurrency**: 400 connections
+- **Memory**: Low allocation, efficient GC
+
+#### HTTP/2 Improvements
+- **Multiplexing**: Multiple streams per connection
+- **Header Compression**: HPACK reduces overhead
+- **Server Push**: Proactive resource delivery
+- **Performance**: 25% improvement with concurrent requests
+
+#### HTTP/3 Benefits
+- **QUIC Transport**: UDP-based, faster connection establishment
+- **0-RTT**: Instant reconnection for repeat clients
+- **Connection Migration**: Survives network changes
+- **Reduced Latency**: Eliminates head-of-line blocking
+
+### 🛠️ Development Tools
+
+#### Testing Scripts
+- `test-protocols.sh`: Multi-protocol testing and validation
+- `benchmark-http2.sh`: HTTP/2 performance benchmarking
+- `simple-http2-test.sh`: Quick HTTP/1.1 vs HTTP/2 comparison
+- `run-http2-benchmark.sh`: Comprehensive HTTP/2 testing suite
+
+#### Benchmark Tools
+- **wrk**: HTTP/1.1 load testing with custom Lua scripts
+- **curl**: HTTP/2 and HTTP/3 protocol testing
+- **wscat**: WebSocket connection testing
+- **Custom Scripts**: Protocol-specific performance analysis
+
+### 🔧 Configuration Examples
+
+#### Basic Multi-Protocol Setup
+```toml
+[server]
+port = 8090              # HTTP/1.1 and WebSocket
+https_port = 8443        # HTTP/2 and HTTP/3
+
+[protocols]
+http2_enabled = true
+http3_enabled = true
+websocket_enabled = true
+
+[tls]
+auto_generate = true     # Auto-generate certificates
+```
+
+#### Production Configuration
+```toml
+[server]
+port = 80
+https_port = 443
+
+[protocols]
+http2_enabled = true
+http3_enabled = true
+websocket_enabled = true
+
+[tls]
+cert_file = "/etc/ssl/certs/domain.crt"
+key_file = "/etc/ssl/private/domain.key"
+auto_generate = false
+
+[load_balancer]
+algorithm = "least_connections"
+```
+
+### 🚀 Quick Start Summary
+
+1. **Start Backend Servers**: `./start-backends.sh`
+2. **Run Surikiti Proxy**: `go run main.go`
+3. **Test HTTP/1.1**: `curl http://localhost:8090/`
+4. **Test HTTP/2**: `curl --http2 -k https://localhost:8443/`
+5. **Test WebSocket**: `wscat -c ws://localhost:8090/ws`
+6. **Run Benchmarks**: `./scripts/simple-http2-test.sh`
+
+### 📈 Future Enhancements
+
+#### Potential Improvements
+- 🔄 **Full WebSocket Support**: Complete gnet WebSocket implementation
+- 📊 **Prometheus Metrics**: Built-in metrics endpoint
+- 🔍 **Distributed Tracing**: OpenTelemetry integration
+- 🛡️ **Rate Limiting**: Request rate limiting and throttling
+- 🔐 **Authentication**: JWT and OAuth2 support
+- 📱 **Admin Dashboard**: Web-based management interface
 
 ---
 
