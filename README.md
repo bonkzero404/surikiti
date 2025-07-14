@@ -91,50 +91,55 @@ graph TB
 
 ### Component Overview
 
-| Component | Technology | Purpose |
-|-----------|------------|----------|
-| **Proxy Server** | gnet + fasthttp | High-performance request handling |
-| **Protocol Handler** | HTTP/1.1, HTTP/2, HTTP/3, WebSocket | Multi-protocol support |
-| **Load Balancer** | Custom Go | Distribute requests across backends |
-| **Health Monitor** | HTTP client | Monitor backend server health |
-| **Configuration** | TOML | Runtime configuration management |
-| **Logging** | Zap | Structured logging with rotation |
-| **Connection Pool** | fasthttp | Efficient connection reuse |
+| Component | Technology | Purpose | Port |
+|-----------|------------|---------|------|
+| **Main Server** | gnet | High-performance HTTP/1.1 proxy | 8086 |
+| **API Server** | gnet | Dedicated API proxy server | 9086 |
+| **WebSocket Server** | Go net/http | Real-time bidirectional communication | 9087 |
+| **HTTP/2 Server** | Go net/http | HTTP/2 with TLS support | 8443 |
+| **HTTP/3 Server** | quic-go | HTTP/3 over QUIC protocol | 8443 |
+| **Load Balancer** | Custom Go | Distribute requests across backends | - |
+| **Health Monitor** | HTTP client | Monitor backend server health | - |
+| **Configuration** | TOML | Multi-file configuration management | - |
+| **Logging** | Zap | Structured logging with rotation | - |
+| **Connection Pool** | fasthttp | Efficient connection reuse | - |
 
 ### Server Startup Architecture
 
-Surikiti uses a sophisticated startup sequence to prevent race conditions and ensure reliable server initialization:
+Surikiti uses a multi-server architecture with dedicated configuration files for each server type:
 
-#### Unified Server Mode (Same Port)
+#### Multi-Server Architecture (Current Implementation)
 ```mermaid
 sequenceDiagram
     participant Main as Main Process
-    participant HTTP as HTTP Server
-    participant WS as WebSocket Handler
-    participant Gnet as gnet Engine
+    participant MainServer as Main Server (gnet)
+    participant APIServer as API Server (gnet)
+    participant WSServer as WebSocket Server (HTTP)
+    participant Config as Config Loader
     
-    Main->>HTTP: Initialize unified server
-    Main->>WS: Register WebSocket handlers
-    Main->>HTTP: Start server on port 8086
-    HTTP->>Gnet: Use gnet for HTTP/1.1
-    HTTP->>WS: Handle WebSocket upgrades
-    Note over HTTP,WS: Single server handles both protocols
+    Main->>Config: Load config files (*.toml)
+    Config->>Main: Return server configurations
+    
+    par Server Initialization
+        Main->>MainServer: Start main server (port 8086)
+        Main->>APIServer: Start API server (port 9086)
+        Main->>WSServer: Start WebSocket server (port 9087)
+    end
+    
+    MainServer->>Main: gnet server ready
+    APIServer->>Main: gnet server ready
+    WSServer->>Main: HTTP server ready
+    
+    Main->>Main: All servers operational
 ```
 
-#### Separate Server Mode (Different Ports)
-```mermaid
-sequenceDiagram
-    participant Main as Main Process
-    participant WSServer as WebSocket Server
-    participant GnetServer as gnet HTTP Server
-    participant Sync as Synchronization
-    
-    Main->>WSServer: Initialize WebSocket server
-    Main->>WSServer: Start on port 8088 (goroutine)
-    WSServer->>Sync: Signal startup complete
-    Main->>Sync: Wait 100ms for WebSocket ready
-    Main->>GnetServer: Start gnet on port 8086 (goroutine)
-    Note over WSServer,GnetServer: Synchronized startup prevents conflicts
+#### Configuration File Structure
+```
+config/
+├── main.toml      # Main HTTP server (port 8086)
+├── api.toml       # API server (port 9086)
+├── websocket.toml # WebSocket server (port 9087)
+└── global.toml    # Shared upstream definitions
 ```
 
 #### Race Condition Prevention
@@ -476,7 +481,10 @@ curl --http3 -k https://localhost:8443/api/users
 ```bash
 # WebSocket connection (requires wscat)
 npm install -g wscat
-wscat -c ws://localhost:8090/ws
+wscat -c ws://localhost:9087
+
+# Alternative with websocat
+websocat ws://127.0.0.1:9087
 ```
 
 ### Testing the Proxy
@@ -1045,8 +1053,14 @@ grep "duration_ms" proxy.log | \
 ```
 surikiti/
 ├── main.go                 # Application entry point
+├── cmd/
+│   └── root.go            # CLI command and server startup logic
 ├── config/
-│   └── config.go          # Configuration management
+│   ├── config.go          # Configuration management
+│   ├── main.toml          # Main server configuration (port 8086)
+│   ├── api.toml           # API server configuration (port 9086)
+│   ├── websocket.toml     # WebSocket server configuration (port 9087)
+│   └── global.toml        # Shared upstream definitions
 ├── proxy/
 │   ├── proxy.go           # Core proxy implementation (HTTP/1.1)
 │   ├── http2.go           # HTTP/2 server implementation
@@ -1061,13 +1075,16 @@ surikiti/
 ├── test-backends/
 │   ├── backend1.py        # Test backend server 1
 │   ├── backend2.py        # Test backend server 2
-│   └── backend3.py        # Test backend server 3
+│   ├── backend3.py        # Test backend server 3
+│   └── websocket_backend.py # WebSocket test backend
 ├── scripts/
 │   ├── generate-certs.sh  # TLS certificate generation script
 │   ├── start-backends.sh  # Backend startup script
 │   └── test-protocols.sh  # Multi-protocol testing script
-├── config.toml            # Default configuration
-
+├── logs/                  # Log files directory
+│   ├── surikiti_main.log  # Main server logs
+│   ├── surikiti_api.log   # API server logs
+│   └── surikiti_ws.log    # WebSocket server logs
 ├── go.mod                 # Go module definition
 ├── go.sum                 # Go module checksums
 └── README.md              # This documentation
@@ -1075,15 +1092,24 @@ surikiti/
 
 #### Key Components
 
-- **main.go**: Application entry point with multi-protocol server initialization
+- **main.go**: Application entry point
+- **cmd/root.go**: CLI command handling and multi-server startup logic
+- **config/**: Multi-file configuration management
+  - `config.go`: Configuration loading and parsing
+  - `main.toml`: Main HTTP server configuration (port 8086)
+  - `api.toml`: API server configuration (port 9086)
+  - `websocket.toml`: WebSocket server configuration (port 9087)
+  - `global.toml`: Shared upstream backend definitions
 - **proxy/**: Core proxy implementations for different protocols
-  - `proxy.go`: HTTP/1.1 and WebSocket handling with gnet
-  - `http2.go`: HTTP/2 server with fasthttp
+  - `proxy.go`: HTTP/1.1 handling with gnet
+  - `http2.go`: HTTP/2 server implementation
   - `http3.go`: HTTP/3 server with QUIC support
-  - `websocket.go`: WebSocket upgrade and message handling
+  - `websocket.go`: WebSocket server with standard HTTP library
 - **tls/**: TLS certificate management and auto-generation
+- **test-backends/**: Test servers for development and testing
 - **scripts/**: Testing and benchmarking utilities for all protocols
 - **loadbalancer/**: Protocol-agnostic load balancing logic
+- **logs/**: Dedicated log files for each server instance
 
 ### Dependencies
 
@@ -1498,27 +1524,46 @@ algorithm = "least_connections"
 
 1. **Verify WebSocket configuration**:
    ```toml
-   [protocols]
-   websocket_enabled = true
-   
+   # config/websocket.toml
    [server]
-   websocket_port = 8088  # Separate port recommended
+   name = "websocket_only"
+   host = "0.0.0.0"
+   port = 9087
+   enabled = true
    ```
 
 2. **Test WebSocket connectivity**:
    ```bash
-   # Test WebSocket upgrade
+   # Test WebSocket connection
+   wscat -c ws://localhost:9087
+   
+   # Alternative with websocat
+   websocat ws://127.0.0.1:9087
+   
+   # Test WebSocket upgrade with curl
    curl -i -N -H "Connection: Upgrade" \
         -H "Upgrade: websocket" \
         -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
         -H "Sec-WebSocket-Version: 13" \
-        http://localhost:8088/ws
+        http://localhost:9087/ws
    ```
 
 3. **Check backend WebSocket support**:
    ```bash
    # Test backend directly
-   wscat -c ws://localhost:3004/ws
+   wscat -c ws://localhost:3004
+   
+   # Check if WebSocket backend is running
+   lsof -i :3004
+   ```
+
+4. **Verify server startup**:
+   ```bash
+   # Check if WebSocket server is running
+   lsof -i :9087
+   
+   # Check logs for WebSocket server
+   tail -f logs/surikiti_websocket.log
    ```
 
 #### 5. High Memory Usage
