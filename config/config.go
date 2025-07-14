@@ -52,6 +52,15 @@ type ProxyConfig struct {
 	MaxIdleConnsPerHost int           `mapstructure:"max_idle_conns_per_host"` // Maximum idle connections per host
 	MaxConnsPerHost     int           `mapstructure:"max_conns_per_host"`    // Maximum connections per host
 	IdleConnTimeout     time.Duration `mapstructure:"idle_conn_timeout"`     // Idle connection timeout
+	// Protocol support
+	EnableHTTP2         bool          `mapstructure:"enable_http2"`          // Enable HTTP/2 support
+	EnableHTTP3         bool          `mapstructure:"enable_http3"`          // Enable HTTP/3 support
+	EnableWebSocket     bool          `mapstructure:"enable_websocket"`      // Enable WebSocket support
+	HTTP3Port           int           `mapstructure:"http3_port"`            // HTTP/3 UDP port
+	TLSCertFile         string        `mapstructure:"tls_cert_file"`         // TLS certificate file for HTTPS/HTTP2/HTTP3
+	TLSKeyFile          string        `mapstructure:"tls_key_file"`          // TLS private key file
+	WebSocketTimeout    time.Duration `mapstructure:"websocket_timeout"`     // WebSocket connection timeout
+	WebSocketBufferSize int           `mapstructure:"websocket_buffer_size"` // WebSocket buffer size
 }
 
 type CORSConfig struct {

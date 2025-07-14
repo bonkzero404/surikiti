@@ -23,24 +23,29 @@ type ProxyServer struct {
 	client       *fasthttp.Client
 	proxyConfig  config.ProxyConfig
 	corsConfig   config.CORSConfig
+	websocketProxy *WebSocketProxy
+	http2http3Server *HTTP2HTTP3Server
 }
 
 func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
-	// Create fasthttp client optimized for high concurrency
+	// Create fasthttp client optimized for stability
 	client := &fasthttp.Client{
-		ReadTimeout:                   time.Second * 2,  // Reduced timeout
-		WriteTimeout:                  time.Second * 2,  // Reduced timeout
-		MaxIdleConnDuration:           time.Second * 10, // Increased for connection reuse
-		MaxConnDuration:               time.Minute * 2,  // Longer duration for efficiency
-		MaxConnsPerHost:               100,              // Increased for high concurrency
+		ReadTimeout:                   proxyConfig.RequestTimeout,
+		WriteTimeout:                  proxyConfig.RequestTimeout,
+		MaxIdleConnDuration:           time.Second * 30,
+		MaxConnDuration:               time.Minute * 1,
+		MaxConnsPerHost:               proxyConfig.MaxConnsPerHost,
+		MaxConnWaitTimeout:            time.Second * 5,
+		ReadBufferSize:                proxyConfig.BufferSize,
+		WriteBufferSize:               proxyConfig.BufferSize,
 		DisableHeaderNamesNormalizing: false,
 		DisablePathNormalizing:        false,
 		RetryIf: func(request *fasthttp.Request) bool {
-			// Retry on connection errors
-			return true
+			// Disable retries for stability
+			return false
 		},
 		Dial: (&fasthttp.TCPDialer{
-			Concurrency:      1000, // High concurrency for load testing
+			Concurrency:      1000,
 			DNSCacheDuration: time.Minute * 10,
 		}).Dial,
 	}
@@ -53,6 +58,18 @@ func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConf
 		corsConfig:   corsConfig,
 	}
 
+	// Initialize WebSocket proxy if enabled
+	if proxyConfig.EnableWebSocket {
+		ps.websocketProxy = NewWebSocketProxy(lb, logger, proxyConfig)
+		logger.Info("WebSocket proxy enabled")
+	}
+
+	// Initialize HTTP/2 and HTTP/3 server if enabled
+	if proxyConfig.EnableHTTP2 || proxyConfig.EnableHTTP3 {
+		ps.http2http3Server = NewHTTP2HTTP3Server(lb, logger, proxyConfig)
+		logger.Info("HTTP/2 and HTTP/3 support enabled")
+	}
+
 	// Start health check
 	lb.StartHealthCheck()
 
@@ -61,6 +78,34 @@ func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConf
 
 func (ps *ProxyServer) OnBoot(eng gnet.Engine) gnet.Action {
 	ps.logger.Info("Proxy server started")
+	
+	// Start HTTP/2 server if enabled
+	if ps.http2http3Server != nil && ps.proxyConfig.EnableHTTP2 {
+		go func() {
+			if ps.proxyConfig.TLSCertFile != "" && ps.proxyConfig.TLSKeyFile != "" {
+				addr := "0.0.0.0:8443"
+				if err := ps.http2http3Server.StartHTTP2Server(addr); err != nil {
+					ps.logger.Error("Failed to start HTTP/2 server", zap.Error(err))
+				}
+			} else {
+				ps.logger.Warn("HTTP/2 enabled but TLS certificates not configured")
+			}
+		}()
+	}
+	
+	// Start HTTP/3 server if enabled
+	if ps.http2http3Server != nil && ps.proxyConfig.EnableHTTP3 {
+		go func() {
+			if ps.proxyConfig.TLSCertFile != "" && ps.proxyConfig.TLSKeyFile != "" {
+				if err := ps.http2http3Server.StartHTTP3Server(); err != nil {
+					ps.logger.Error("Failed to start HTTP/3 server", zap.Error(err))
+				}
+			} else {
+				ps.logger.Warn("HTTP/3 enabled but TLS certificates not configured")
+			}
+		}()
+	}
+	
 	return gnet.None
 }
 
@@ -103,23 +148,57 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	// Read the HTTP request
 	reqData, err := c.Next(-1)
 	if err != nil {
+		ps.logger.Debug("Failed to read request data", zap.Error(err))
 		return gnet.Close
+	}
+
+	// Check for empty request data
+	if len(reqData) == 0 {
+		ps.logger.Debug("Received empty request data")
+		return gnet.Close
+	}
+
+	// Check max body size first
+	if int64(len(reqData)) > ps.proxyConfig.MaxBodySize {
+		ps.logger.Warn("Request too large", zap.Int("size", len(reqData)), zap.Int64("max", ps.proxyConfig.MaxBodySize))
+		ps.sendErrorResponse(c, fasthttp.StatusRequestEntityTooLarge, "Request Entity Too Large")
+		return gnet.None
 	}
 
 	// Parse HTTP request using fasthttp properly
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
 
-	// Check max body size first
-	if int64(len(reqData)) > ps.proxyConfig.MaxBodySize {
-		ps.sendErrorResponse(c, fasthttp.StatusRequestEntityTooLarge, "Request Entity Too Large")
+	bufReader := bufio.NewReader(bytes.NewReader(reqData))
+	if readErr := req.Read(bufReader); readErr != nil {
+		ps.logger.Debug("Failed to parse HTTP request", zap.Error(readErr))
+		ps.sendErrorResponse(c, fasthttp.StatusBadRequest, "Bad Request")
 		return gnet.None
 	}
 
-	bufReader := bufio.NewReader(bytes.NewReader(reqData))
-	if readErr := req.Read(bufReader); readErr != nil {
+	// Validate HTTP method
+	method := string(req.Header.Method())
+	if method == "" {
+		ps.logger.Debug("Missing HTTP method in request")
 		ps.sendErrorResponse(c, fasthttp.StatusBadRequest, "Bad Request")
 		return gnet.None
+	}
+
+	// Check for WebSocket upgrade request
+	if ps.websocketProxy != nil && ps.proxyConfig.EnableWebSocket {
+		headers := make(map[string]string)
+		req.Header.VisitAll(func(key, value []byte) {
+			headers[string(key)] = string(value)
+		})
+		
+		if ps.websocketProxy.IsWebSocketRequest(headers) {
+			ps.logger.Debug("WebSocket upgrade request detected")
+			// Note: WebSocket handling would require a different approach
+			// as gnet doesn't directly support HTTP upgrade protocol
+			// This is a limitation that would need to be addressed
+			ps.sendErrorResponse(c, fasthttp.StatusNotImplemented, "WebSocket upgrade not supported in gnet mode")
+			return gnet.None
+		}
 	}
 
 	// Handle CORS preflight requests

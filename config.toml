@@ -22,7 +22,7 @@ weight = 2
 health_check = "/health"
 
 [load_balancer]
-method = "round_robin"  # round_robin, weighted_round_robin, least_connections, single
+method = "least_connections"  # round_robin, weighted_round_robin, least_connections, single
 timeout = "30s"
 max_retries = 3
 
@@ -32,17 +32,27 @@ file = "proxy.log"
 
 [proxy]
 max_body_size = 10485760        # Maximum request body size (10MB)
-request_timeout = "3s"          # Timeout for upstream requests
-response_timeout = "5s"         # Timeout for response handling
+request_timeout = "5s"          # Timeout for upstream requests
+response_timeout = "15s"        # Timeout for response handling
 max_header_size = 8192          # Maximum header size in bytes
 keep_alive_timeout = "60s"      # Keep-alive timeout
 max_connections = 1000          # Maximum concurrent connections
-buffer_size = 4096              # Buffer size for I/O operations
+buffer_size = 32768             # Buffer size for I/O operations
 enable_compression = true       # Enable response compression
 max_idle_conns = 100            # Maximum idle connections in pool
-max_idle_conns_per_host = 10    # Maximum idle connections per host
-max_conns_per_host = 50         # Maximum connections per host
+max_idle_conns_per_host = 50    # Maximum idle connections per host
+max_conns_per_host = 500        # Maximum connections per host
 idle_conn_timeout = "90s"       # Idle connection timeout
+
+# Protocol Support
+enable_http2 = true             # Enable HTTP/2 support
+enable_http3 = true             # Enable HTTP/3 support (requires TLS)
+enable_websocket = true         # Enable WebSocket proxying
+http3_port = 8443               # HTTP/3 UDP port (QUIC)
+tls_cert_file = "certs/server.crt"              # Path to TLS certificate file
+tls_key_file = "certs/server.key"               # Path to TLS private key file
+websocket_timeout = "300s"      # WebSocket connection timeout (5 minutes)
+websocket_buffer_size = 4096    # WebSocket message buffer size
 
 [cors]
 enabled = false
