@@ -913,81 +913,6 @@ file = "proxy.log"
 }
 ```
 
-### Key Metrics
-
-#### Request Metrics
-- **Request count** per endpoint
-- **Response time** distribution
-- **Status code** distribution
-- **Error rate** percentage
-
-#### Backend Metrics
-- **Health status** per backend
-- **Connection count** per backend
-- **Request distribution** across backends
-- **Failover events** count
-
-#### System Metrics
-- **Memory usage** and GC stats
-- **Goroutine count** and growth
-- **Connection pool** utilization
-- **Network I/O** statistics
-
-### Monitoring Tools Integration
-
-#### Prometheus Metrics (Future Enhancement)
-```go
-// Example metrics that could be added
-var (
-    requestsTotal = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "surikiti_requests_total",
-            Help: "Total number of requests processed",
-        },
-        []string{"method", "status", "upstream"},
-    )
-    
-    requestDuration = prometheus.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Name: "surikiti_request_duration_seconds",
-            Help: "Request duration in seconds",
-        },
-        []string{"method", "upstream"},
-    )
-)
-```
-
-#### Log Analysis
-```bash
-# Request rate per minute
-grep "Request proxied successfully" proxy.log | \
-  awk '{print $2}' | cut -c1-16 | uniq -c
-
-# Error rate analysis
-grep "ERROR" proxy.log | wc -l
-
-# Response time analysis
-grep "duration_ms" proxy.log | \
-  jq -r '.duration_ms' | \
-  awk '{sum+=$1; count++} END {print "Avg:", sum/count "ms"}'
-```
-
-### Building
-
-```bash
-# Development build
-go build -o surikiti
-
-# Production build with optimizations
-go build -ldflags="-s -w" -o surikiti
-
-# Cross-compilation for Linux
-GOOS=linux GOARCH=amd64 go build -o surikiti-linux
-
-# Build with race detection (development)
-go build -race -o surikiti-debug
-```
-
 ## 🎯 Implementation Status
 
 ### ✅ Completed Features
@@ -1002,13 +927,6 @@ go build -race -o surikiti-debug
 - ✅ **TLS/SSL**: Auto-generated certificates and custom certificate support
 - ✅ **CORS Support**: Configurable Cross-Origin Resource Sharing
 
-#### Configuration & Management
-- ✅ **TOML Configuration**: Human-readable configuration files
-- ✅ **Multi-Protocol Configuration**: Protocol-specific settings
-- ✅ **TLS Auto-Generation**: Automatic self-signed certificate creation
-- ✅ **Structured Logging**: High-performance logging with zap
-- ✅ **Hot Reload**: Configuration updates without restart
-
 ### 🔄 Protocol Support Matrix
 
 | Protocol | Status | Port | Features | Performance |
@@ -1017,31 +935,3 @@ go build -race -o surikiti-debug
 | **HTTP/2** | ✅ Complete | 8443 | Multiplexing, HPACK, Server Push | ~25% improvement |
 | **HTTP/3** | ✅ Complete | 8443 | QUIC, 0-RTT, Connection Migration | Lower latency |
 | **WebSocket** | ⚠️ Partial | 8090 | Real-time, Bidirectional | Limited by gnet |
-
-### 📊 Performance Achievements
-
-#### HTTP/1.1 Benchmarks
-- **Throughput**: 187,123 requests/sec
-- **Latency**: 2.15ms average
-- **Concurrency**: 400 connections
-- **Memory**: Low allocation, efficient GC
-
-#### HTTP/2 Improvements
-- **Multiplexing**: Multiple streams per connection
-- **Header Compression**: HPACK reduces overhead
-- **Server Push**: Proactive resource delivery
-- **Performance**: 25% improvement with concurrent requests
-
-#### HTTP/3 Benefits
-- **QUIC Transport**: UDP-based, faster connection establishment
-- **0-RTT**: Instant reconnection for repeat clients
-- **Connection Migration**: Survives network changes
-- **Reduced Latency**: Eliminates head-of-line blocking
-
-### 🛠️ Development Tools
-
-#### Testing Scripts
-- `test-protocols.sh`: Multi-protocol testing and validation
-- `benchmark-http2.sh`: HTTP/2 performance benchmarking
-- `simple-http2-test.sh`: Quick HTTP/1.1 vs HTTP/2 comparison
-- `run-http2-benchmark.sh`: Comprehensive HTTP/2 testing suite
