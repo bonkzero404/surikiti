@@ -29,14 +29,7 @@ health_check_timeout = "5s"
 # WebSocket Upstream Servers
 [[websocket_upstreams]]
 name = "ws_backend1"
-url = "ws://localhost:8001"
-weight = 1
-health_check_interval = "30s"
-health_check_timeout = "5s"
-
-[[websocket_upstreams]]
-name = "ws_backend2"
-url = "ws://localhost:8002"
+url = "ws://localhost:3004"
 weight = 1
 health_check_interval = "30s"
 health_check_timeout = "5s"

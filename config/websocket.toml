@@ -3,19 +3,18 @@
 name = "websocket_only"
 host = "0.0.0.0"
 port = 9087
-websocket_port = 9088
-enabled = false
+enabled = true
 upstreams = ["ws_backend1"]
 
 # Load Balancer Configuration
 [load_balancer]
-method = "round_robin"
+method = "single"
 timeout = "45s"
 retry_attempts = 5
 
 # Logging Configuration
 [logging]
-level = "warn"
+level = "info"
 file = "logs/surikiti_websocket.log"
 
 # Proxy Configuration

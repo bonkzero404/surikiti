@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -324,27 +325,69 @@ func startServerInstance(instance *ServerInstance, cfg *config.Config, shutdownC
 	// Add to wait group before starting goroutine
 	wg.Add(1)
 
-	// Start gnet server
-	go func() {
-		defer wg.Done()
-		addr := fmt.Sprintf("tcp://%s:%d", instance.config.Host, instance.config.Port)
-		instance.logger.Info("Reverse proxy server started successfully",
-			zap.String("server", instance.name),
-			zap.String("address", addr))
+	// Check if this is a WebSocket-only server
+	instance.logger.Info("Checking server type", zap.String("name", instance.name), zap.Bool("is_websocket", strings.Contains(strings.ToLower(instance.name), "websocket")))
+	if strings.Contains(strings.ToLower(instance.name), "websocket") {
+		// Use standard HTTP server for WebSocket support
+		go func() {
+			defer wg.Done()
+			addr := fmt.Sprintf("%s:%d", instance.config.Host, instance.config.Port)
+			instance.logger.Info("WebSocket server started successfully",
+				zap.String("server", instance.name),
+				zap.String("address", fmt.Sprintf("http://%s", addr)))
 
-		if err := gnet.Run(instance.proxyServer, addr, gnet.WithMulticore(true)); err != nil {
-			select {
-			case <-shutdownChan:
-				// Shutdown was requested, this is expected
-				instance.logger.Info("Server shutdown completed", zap.String("server", instance.name))
-			default:
-				// Unexpected error
-				errorChan <- fmt.Errorf("gnet server error for %s: %w", instance.name, err)
+			// Create HTTP server for WebSocket
+			mux := http.NewServeMux()
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				if instance.proxyServer.IsWebSocketRequest(r) {
+					instance.proxyServer.HandleWebSocketHTTP(w, r)
+				} else {
+					instance.proxyServer.HandleHTTPProxy(w, r)
+				}
+			})
+
+			server := &http.Server{
+				Addr:    addr,
+				Handler: mux,
 			}
-		}
-	}()
 
-	// Signal that gnet server has started
+			// Store server reference for shutdown
+			instance.httpServer = server
+
+			// Start server in a separate goroutine
+			go func() {
+				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					errorChan <- fmt.Errorf("HTTP server error for %s: %w", instance.name, err)
+				}
+			}()
+
+			// Wait for shutdown signal
+			<-shutdownChan
+			instance.logger.Info("WebSocket server shutdown signal received", zap.String("server", instance.name))
+		}()
+	} else {
+		// Use gnet server for regular HTTP
+		go func() {
+			defer wg.Done()
+			addr := fmt.Sprintf("tcp://%s:%d", instance.config.Host, instance.config.Port)
+			instance.logger.Info("Reverse proxy server started successfully",
+				zap.String("server", instance.name),
+				zap.String("address", addr))
+
+			if err := gnet.Run(instance.proxyServer, addr, gnet.WithMulticore(true)); err != nil {
+				select {
+				case <-shutdownChan:
+					// Shutdown was requested, this is expected
+					instance.logger.Info("Server shutdown completed", zap.String("server", instance.name))
+				default:
+					// Unexpected error
+					errorChan <- fmt.Errorf("gnet server error for %s: %w", instance.name, err)
+				}
+			}
+		}()
+	}
+
+	// Signal that server has started
 	close(instance.gnetStarted)
 
 	return nil
@@ -353,6 +396,16 @@ func startServerInstance(instance *ServerInstance, cfg *config.Config, shutdownC
 // shutdownServerInstance gracefully shuts down a server instance
 func shutdownServerInstance(instance *ServerInstance, ctx context.Context, logger *zap.Logger) {
 	logger.Info("Shutting down server instance", zap.String("name", instance.name))
+
+	// Shutdown HTTP server if it exists (for WebSocket servers)
+	if instance.httpServer != nil {
+		logger.Info("Shutting down HTTP server", zap.String("server", instance.name))
+		if err := instance.httpServer.Shutdown(ctx); err != nil {
+			logger.Error("Error shutting down HTTP server",
+				zap.String("server", instance.name),
+				zap.Error(err))
+		}
+	}
 
 	// Stop load balancers first to prevent panic from double close
 	if instance.loadBalancer != nil {
@@ -380,7 +433,7 @@ func shutdownServerInstance(instance *ServerInstance, ctx context.Context, logge
 		}()
 	}
 
-	// Shutdown proxy server
+	// Shutdown proxy server (for gnet servers)
 	if instance.proxyServer != nil {
 		if err := instance.proxyServer.Shutdown(ctx); err != nil {
 			logger.Error("Error shutting down proxy server",
