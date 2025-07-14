@@ -397,7 +397,7 @@ file = "proxy.log"
 | `host` | string | "0.0.0.0" | Server bind address |
 | `port` | int | 8086 | HTTP/1.1 server listen port |
 | `https_port` | int | 8443 | HTTP/2 and HTTP/3 server port |
-| `websocket_port` | int | 8088 | WebSocket server port (separate mode) |
+| `websocket_port` | int | ❌ Deprecated | Use separate config files instead |
 
 #### Upstream Configuration
 | Parameter | Type | Required | Description |
@@ -413,7 +413,9 @@ file = "proxy.log"
 | `name` | string | ✅ | Unique WebSocket backend identifier |
 | `url` | string | ✅ | WebSocket backend URL (ws:// or wss://) |
 | `weight` | int | ✅ | Load balancing weight for WebSocket |
-| `health_check` | string | ✅ | WebSocket health check endpoint |
+| `health_check_path` | string | ✅ | WebSocket health check endpoint path |
+| `health_check_interval` | string | ✅ | Health check interval (e.g., "30s") |
+| `health_check_timeout` | string | ✅ | Health check timeout (e.g., "5s") |
 
 #### Load Balancer Configuration
 | Parameter | Type | Default | Description |
@@ -707,59 +709,70 @@ curl --http3 -k https://localhost:8443/api/users
 
 #### WebSocket Configuration Modes
 
-**1. Unified Server Mode** (WebSocket + HTTP on same port):
-```toml
-[server]
-port = 8086
-websocket_port = 8086  # Same as HTTP port
+**Separate Server Mode** (Current Implementation):
 
-[protocols]
-websocket_enabled = true
+WebSocket server now uses a dedicated configuration file `config/websocket.toml`:
+
+```toml
+# config/websocket.toml
+[server]
+name = "websocket_only"
+host = "0.0.0.0"
+port = 9087
+enabled = true
+upstreams = ["ws_backend1"]
+
+[load_balancer]
+method = "single"
+timeout = "45s"
+retry_attempts = 5
+
+[logging]
+level = "info"
+format = "json"
 ```
 
-**2. Separate Server Mode** (Recommended):
-```toml
-[server]
-port = 8086              # HTTP/1.1 with gnet
-websocket_port = 8088    # WebSocket with standard HTTP server
-
-[protocols]
-websocket_enabled = true
-```
+Main server configuration remains in `config/config.toml` for HTTP/1.1, HTTP/2, and HTTP/3.
 
 #### WebSocket Testing
 
 ```bash
-# WebSocket connection (separate port mode)
+# WebSocket connection (default port 9087)
 npm install -g wscat
-wscat -c ws://localhost:8088/ws
+wscat -c ws://localhost:9087
 
-# WebSocket connection (unified mode)
-wscat -c ws://localhost:8086/ws
+# Alternative WebSocket testing with websocat
+websocat ws://127.0.0.1:9087
 
 # WebSocket upgrade with curl
 curl -i -N -H "Connection: Upgrade" \
      -H "Upgrade: websocket" \
      -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
      -H "Sec-WebSocket-Version: 13" \
-     http://localhost:8088/ws
+     http://localhost:9087/ws
 ```
 
 #### WebSocket Upstream Configuration
 
+WebSocket upstreams are now configured in the dedicated `config/websocket.toml` file:
+
 ```toml
-# WebSocket backend servers
-[[websocket_upstreams]]
-name = "websocket_backend1"
+# config/websocket.toml
+[[upstreams]]
+name = "ws_backend1"
 url = "ws://localhost:3004"
 weight = 1
-health_check = "/ws/health"
+health_check_path = "/health"
+health_check_interval = "30s"
+health_check_timeout = "5s"
 
-[[websocket_upstreams]]
-name = "websocket_backend2"
+[[upstreams]]
+name = "ws_backend2"
 url = "ws://localhost:3005"
 weight = 1
-health_check = "/ws/health"
+health_check_path = "/health"
+health_check_interval = "30s"
+health_check_timeout = "5s"
 ```
 
 #### WebSocket Features
