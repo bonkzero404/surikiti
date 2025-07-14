@@ -1,4 +1,4 @@
-package proxy
+package main
 
 import (
 	"context"
@@ -13,20 +13,19 @@ import (
 	"golang.org/x/net/http2"
 	"go.uber.org/zap"
 
-	"surikiti/config"
-	"surikiti/loadbalancer"
+
 )
 
 type HTTP2HTTP3Server struct {
-	loadBalancer *loadbalancer.LoadBalancer
+	loadBalancer *LoadBalancer
 	logger       *zap.Logger
-	config       config.ProxyConfig
+	config       ProxyConfig
 	http2Server  *http.Server
 	http3Server  *http3.Server
 	tlsConfig    *tls.Config
 }
 
-func NewHTTP2HTTP3Server(lb *loadbalancer.LoadBalancer, logger *zap.Logger, cfg config.ProxyConfig) *HTTP2HTTP3Server {
+func NewHTTP2HTTP3Server(lb *LoadBalancer, logger *zap.Logger, cfg ProxyConfig) *HTTP2HTTP3Server {
 	server := &HTTP2HTTP3Server{
 		loadBalancer: lb,
 		logger:       logger,

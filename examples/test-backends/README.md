@@ -74,7 +74,7 @@ Use the provided script to start all backends at once:
 
 ```bash
 # From project root directory
-./scripts/start-backends.sh
+./examples/scripts/start-backends.sh
 ```
 
 This will start:
@@ -87,15 +87,15 @@ This will start:
 
 ```bash
 # HTTP Backends
-python3 test-backends/backend1.py
-python3 test-backends/backend2.py
-python3 test-backends/backend3.py
+python3 examples/test-backends/backend1.py
+python3 examples/test-backends/backend2.py
+python3 examples/test-backends/backend3.py
 
 # WebSocket Backend
-python3 test-backends/websocket_backend.py
+python3 examples/test-backends/websocket_backend.py
 
 # With custom host/port
-python3 test-backends/websocket_backend.py --host 0.0.0.0 --port 3005
+python3 examples/test-backends/websocket_backend.py --host 0.0.0.0 --port 3005
 ```
 
 ## Testing

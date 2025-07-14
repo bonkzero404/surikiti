@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# Script untuk menjalankan semua backend servers untuk testing
-
 echo "Starting backend servers for testing..."
 
 # Function to kill background processes on exit

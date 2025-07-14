@@ -14,88 +14,7 @@
 - [Load Balancing](#load-balancing)
 - [Health Checks](#health-checks)
 - [CORS Support](#cors-support)
-- [Monitoring](#monitoring)
-- [Development](#development)
-- [Contributing](#contributing)
 
-## 🎯 Overview
-
-Surikiti is a reverse proxy server optimized for high-performance and high-concurrency workloads. Built with modern Go ecosystem technologies:
-
-- **gnet**: Event-driven networking framework for maximum performance
-- **fasthttp**: HTTP library that's 10x faster than net/http
-- **zap**: Structured logging with zero-allocation
-- **TOML**: Human-readable configuration format
-
-### Key Metrics
-- ⚡ **Throughput**: 2000+ requests/second
-- 🔗 **Concurrency**: 1000+ concurrent connections
-- 📊 **Latency**: <10ms average response time
-- 💾 **Memory**: Optimized with connection pooling
-
-## 🏗️ Architecture
-
-### System Architecture Diagram
-
-```mermaid
-graph TB
-    Client["🌐 Client<br/>Browser/App<br/>HTTP/1.1 :8090<br/>HTTP/2 :8443<br/>HTTP/3 :8443<br/>WebSocket :8090"] --> Proxy["🚀 Surikiti Proxy<br/>gnet + fasthttp<br/>Multi-Protocol Support<br/>Load Balancer"]
-    
-    Proxy --> Backend1["🖥️ Backend 1<br/>:3001"]
-    Proxy --> Backend2["🖥️ Backend 2<br/>:3002"]
-    Proxy --> Backend3["🖥️ Backend 3<br/>:3003"]
-    
-    Config["⚙️ Configuration<br/>config.toml<br/>• Load Balancing<br/>• Health Checks"] -.-> Proxy
-    
-    Monitor["📊 Health Monitor<br/>Periodic Checks<br/>Auto Recovery"] --> Backend1
-    Monitor --> Backend2
-    Monitor --> Backend3
-    
-    Logs["📝 Monitoring<br/>Structured Logs<br/>• Request Metrics<br/>• Error Tracking"] -.-> Proxy
-    
-    subgraph Features ["✨ Key Features"]
-        F1["⚡ High-Performance: gnet event-driven"]
-        F2["⚖️ Load Balancing: Round-robin, weighted"]
-        F3["🏥 Health Monitoring: Auto failover"]
-        F4["🌍 CORS Support: Configurable policies"]
-        F5["🔗 Connection Pooling: Optimized resources"]
-    end
-    
-    subgraph Performance ["📈 Performance Metrics"]
-        P1["⚡ 2000+ req/s"]
-        P2["🔗 1000+ connections"]
-        P3["📊 <10ms latency"]
-        P4["💾 Optimized memory"]
-        P5["🛡️ 99.9% uptime"]
-        P6["🔄 Dynamic scaling"]
-    end
-    
-    classDef client fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    classDef proxy fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef backend fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
-    classDef config fill:#fce4ec,stroke:#c2185b,stroke-width:2px
-    classDef monitor fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    classDef logs fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
-    classDef features fill:#f1f8e9,stroke:#689f38,stroke-width:2px
-    classDef performance fill:#fff8e1,stroke:#ffa000,stroke-width:2px
-    
-    class Client client
-    class Proxy proxy
-    class Backend1,Backend2,Backend3 backend
-    class Config config
-    class Monitor monitor
-    class Logs logs
-    class F1,F2,F3,F4,F5 features
-    class P1,P2,P3,P4,P5,P6 performance
-```
-
-### Component Overview
-
-| Component | Technology | Purpose | Port |
-|-----------|------------|---------|------|
-| **Main Server** | gnet | High-performance HTTP/1.1 proxy | 8086 |
-| **API Server** | gnet | Dedicated API proxy server | 9086 |
-| **WebSocket Server** | Go net/http | Real-time bidirectional communication | 9087 |
 | **HTTP/2 Server** | Go net/http | HTTP/2 with TLS support | 8443 |
 | **HTTP/3 Server** | quic-go | HTTP/3 over QUIC protocol | 8443 |
 | **Load Balancer** | Custom Go | Distribute requests across backends | - |
@@ -133,15 +52,6 @@ sequenceDiagram
     Main->>Main: All servers operational
 ```
 
-#### Configuration File Structure
-```
-config/
-├── main.toml      # Main HTTP server (port 8086)
-├── api.toml       # API server (port 9086)
-├── websocket.toml # WebSocket server (port 9087)
-└── global.toml    # Shared upstream definitions
-```
-
 #### Race Condition Prevention
 
 **Problem Solved**: Previously, both servers attempted to bind simultaneously, causing "address already in use" errors.
@@ -151,31 +61,6 @@ config/
 2. **Startup Delay**: 100ms synchronization delay before gnet server starts
 3. **Improved Logging**: Clear startup sequence logging for debugging
 4. **Error Isolation**: Each server's errors are handled independently
-
-**Code Structure**:
-```go
-// Separate server mode startup sequence
-if websocketPort != httpPort {
-    // 1. Initialize WebSocket server components first
-    websocketAddr := cfg.Server.Host + ":" + strconv.Itoa(websocketPort)
-    mux := http.NewServeMux()
-    
-    // 2. Start WebSocket server in goroutine
-    go func() {
-        logger.Info("Starting WebSocket server", zap.String("address", websocketAddr))
-        http.ListenAndServe(websocketAddr, mux)
-    }()
-    
-    // 3. Synchronization delay
-    time.Sleep(100 * time.Millisecond)
-    
-    // 4. Start gnet server
-    go func() {
-        logger.Info("Starting gnet HTTP server", zap.String("address", serverAddr))
-        gnet.Run(proxyServer, "tcp://"+serverAddr, options...)
-    }()
-}
-```
 
 ## ✨ Features
 
@@ -274,9 +159,9 @@ Transfer/sec:      3.27MB
 ## 📦 Installation
 
 ### Prerequisites
-- **Go 1.19+** for modern Go features
+- **Go 1.23+** for modern Go features
 - **Linux/macOS** for optimal gnet performance
-- **Python 3.8+** for test backends (optional)
+- **Python 3.8+** for test backends (optional, see [examples/](examples/))
 
 ### Build from Source
 
@@ -298,18 +183,58 @@ go build -o surikiti
 # Build Docker image
 docker build -t surikiti-proxy .
 
-# Run container
-docker run -p 8080:8080 -v $(pwd)/config.toml:/app/config.toml surikiti-proxy
+# Run container with example configs
+docker run -p 8086:8086 -p 9086:9086 -p 9087:9087 \
+  -v $(pwd)/examples/config:/app/config \
+  surikiti-proxy --configs /app/config
 ```
+
+## 🚀 Getting Started with Examples
+
+The `examples/` directory contains everything you need to quickly test Surikiti:
+
+### Quick Demo
+
+1. **Start test backends**:
+   ```bash
+   ./examples/scripts/start-backends.sh
+   ```
+
+2. **Run Surikiti with example configs**:
+   ```bash
+   ./surikiti --configs examples/config
+   ```
+
+3. **Test the setup**:
+   ```bash
+   # Test HTTP load balancing
+   curl http://localhost:8086/health
+   
+   # Test API server
+   curl http://localhost:9086/api/data
+   
+   # Test WebSocket (requires wscat)
+   wscat -c ws://localhost:9087
+   ```
+
+### What's Included
+
+- **Multi-server configuration** (HTTP, API, WebSocket)
+- **Test backend servers** (Python-based)
+- **TLS certificates** for HTTPS testing
+- **Utility scripts** for easy setup
+- **Comprehensive documentation**
+
+See [examples/README.md](examples/README.md) for detailed documentation.
 
 ### Quick Start
 
 ```bash
 # Start test backends (optional)
-./scripts/start-backends.sh
+./examples/scripts/start-backends.sh
 
-# Run proxy server
-./surikiti -config config.toml
+# Run proxy server with example config
+./surikiti --configs examples/config
 ```
 
 ## ⚙️ Configuration
@@ -331,9 +256,9 @@ websocket_enabled = true # Enable WebSocket support
 
 # TLS configuration (required for HTTP/2 and HTTP/3)
 [tls]
-cert_file = "server.crt" # TLS certificate file
-key_file = "server.key"  # TLS private key file
-auto_generate = true     # Auto-generate self-signed cert if files don't exist
+cert_file = "examples/certs/server.crt" # TLS certificate file
+key_file = "examples/certs/server.key"   # TLS private key file
+auto_generate = true                     # Auto-generate self-signed cert if files don't exist
 
 # HTTP Backend servers
 [[upstreams]]
@@ -987,298 +912,6 @@ file = "proxy.log"
 }
 ```
 
-### Key Metrics
-
-#### Request Metrics
-- **Request count** per endpoint
-- **Response time** distribution
-- **Status code** distribution
-- **Error rate** percentage
-
-#### Backend Metrics
-- **Health status** per backend
-- **Connection count** per backend
-- **Request distribution** across backends
-- **Failover events** count
-
-#### System Metrics
-- **Memory usage** and GC stats
-- **Goroutine count** and growth
-- **Connection pool** utilization
-- **Network I/O** statistics
-
-### Monitoring Tools Integration
-
-#### Prometheus Metrics (Future Enhancement)
-```go
-// Example metrics that could be added
-var (
-    requestsTotal = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "surikiti_requests_total",
-            Help: "Total number of requests processed",
-        },
-        []string{"method", "status", "upstream"},
-    )
-    
-    requestDuration = prometheus.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Name: "surikiti_request_duration_seconds",
-            Help: "Request duration in seconds",
-        },
-        []string{"method", "upstream"},
-    )
-)
-```
-
-#### Log Analysis
-```bash
-# Request rate per minute
-grep "Request proxied successfully" proxy.log | \
-  awk '{print $2}' | cut -c1-16 | uniq -c
-
-# Error rate analysis
-grep "ERROR" proxy.log | wc -l
-
-# Response time analysis
-grep "duration_ms" proxy.log | \
-  jq -r '.duration_ms' | \
-  awk '{sum+=$1; count++} END {print "Avg:", sum/count "ms"}'
-```
-
-## 🛠️ Development
-
-### Project Structure
-
-```
-surikiti/
-├── main.go                 # Application entry point
-├── cmd/
-│   └── root.go            # CLI command and server startup logic
-├── config/
-│   ├── config.go          # Configuration management
-│   ├── main.toml          # Main server configuration (port 8086)
-│   ├── api.toml           # API server configuration (port 9086)
-│   ├── websocket.toml     # WebSocket server configuration (port 9087)
-│   └── global.toml        # Shared upstream definitions
-├── proxy/
-│   ├── proxy.go           # Core proxy implementation (HTTP/1.1)
-│   ├── http2.go           # HTTP/2 server implementation
-│   ├── http3.go           # HTTP/3 server implementation
-│   └── websocket.go       # WebSocket handler implementation
-├── loadbalancer/
-│   └── loadbalancer.go    # Load balancing logic
-├── tls/
-│   ├── cert.go            # TLS certificate management
-│   ├── server.crt         # Auto-generated TLS certificate
-│   └── server.key         # Auto-generated TLS private key
-├── test-backends/
-│   ├── backend1.py        # Test backend server 1
-│   ├── backend2.py        # Test backend server 2
-│   ├── backend3.py        # Test backend server 3
-│   └── websocket_backend.py # WebSocket test backend
-├── scripts/
-│   ├── generate-certs.sh  # TLS certificate generation script
-│   ├── start-backends.sh  # Backend startup script
-│   └── test-protocols.sh  # Multi-protocol testing script
-├── logs/                  # Log files directory
-│   ├── surikiti_main.log  # Main server logs
-│   ├── surikiti_api.log   # API server logs
-│   └── surikiti_ws.log    # WebSocket server logs
-├── go.mod                 # Go module definition
-├── go.sum                 # Go module checksums
-└── README.md              # This documentation
-```
-
-#### Key Components
-
-- **main.go**: Application entry point
-- **cmd/root.go**: CLI command handling and multi-server startup logic
-- **config/**: Multi-file configuration management
-  - `config.go`: Configuration loading and parsing
-  - `main.toml`: Main HTTP server configuration (port 8086)
-  - `api.toml`: API server configuration (port 9086)
-  - `websocket.toml`: WebSocket server configuration (port 9087)
-  - `global.toml`: Shared upstream backend definitions
-- **proxy/**: Core proxy implementations for different protocols
-  - `proxy.go`: HTTP/1.1 handling with gnet
-  - `http2.go`: HTTP/2 server implementation
-  - `http3.go`: HTTP/3 server with QUIC support
-  - `websocket.go`: WebSocket server with standard HTTP library
-- **tls/**: TLS certificate management and auto-generation
-- **test-backends/**: Test servers for development and testing
-- **scripts/**: Testing and benchmarking utilities for all protocols
-- **loadbalancer/**: Protocol-agnostic load balancing logic
-- **logs/**: Dedicated log files for each server instance
-
-### Dependencies
-
-```go
-// Core dependencies
-require (
-    github.com/panjf2000/gnet/v2 v2.3.3    // Event-driven networking (HTTP/1.1, WebSocket)
-    github.com/valyala/fasthttp v1.51.0     // High-performance HTTP (HTTP/2, HTTP/3)
-    go.uber.org/zap v1.26.0                // Structured logging
-    github.com/BurntSushi/toml v1.3.2       // TOML configuration
-    gopkg.in/natefinch/lumberjack.v2 v2.2.1 // Log rotation
-    crypto/tls                              // TLS support for HTTPS
-    net/http                                // HTTP/2 and HTTP/3 server
-)
-```
-
-#### Protocol-Specific Dependencies
-
-- **HTTP/1.1 & WebSocket**: `gnet/v2` for high-performance event-driven networking
-- **HTTP/2 & HTTP/3**: `fasthttp` with native Go `net/http` for protocol support
-- **TLS/SSL**: Go's built-in `crypto/tls` for secure connections
-- **Configuration**: `toml` for human-readable configuration files
-- **Logging**: `zap` for structured, high-performance logging
-
-### Building
-
-```bash
-# Development build
-go build -o surikiti
-
-# Production build with optimizations
-go build -ldflags="-s -w" -o surikiti
-
-# Cross-compilation for Linux
-GOOS=linux GOARCH=amd64 go build -o surikiti-linux
-
-# Build with race detection (development)
-go build -race -o surikiti-debug
-```
-
-### Testing
-
-```bash
-# Run unit tests
-go test ./...
-
-# Run tests with coverage
-go test -cover ./...
-
-# Run tests with race detection
-go test -race ./...
-
-# Benchmark tests
-go test -bench=. ./...
-```
-
-### Development Workflow
-
-1. **Start test backends**:
-   ```bash
-   ./scripts/start-backends.sh
-   ```
-
-2. **Run proxy in development mode**:
-   ```bash
-   go run main.go -config config.toml
-   ```
-
-3. **Test with curl**:
-   ```bash
-   curl http://localhost:8090/api/users
-   ```
-
-4. **Load test**:
-   ```bash
-   wrk -t4 -c100 -d10s http://localhost:8090
-   ```
-
-### Code Style
-
-- **gofmt**: Automatic code formatting
-- **golint**: Code style checking
-- **go vet**: Static analysis
-- **gosec**: Security analysis
-
-```bash
-# Format code
-go fmt ./...
-
-# Lint code
-golint ./...
-
-# Vet code
-go vet ./...
-
-# Security check
-gosec ./...
-```
-
-## 🤝 Contributing
-
-### Development Setup
-
-1. **Fork the repository**
-2. **Clone your fork**:
-   ```bash
-   git clone https://github.com/your-username/surikiti.git
-   cd surikiti
-   ```
-3. **Install dependencies**:
-   ```bash
-   go mod download
-   ```
-4. **Create feature branch**:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-### Contribution Guidelines
-
-#### Code Quality
-- ✅ **Write tests** for new features
-- ✅ **Follow Go conventions** and best practices
-- ✅ **Add documentation** for public APIs
-- ✅ **Use structured logging** with zap
-- ✅ **Handle errors** gracefully
-
-#### Performance Considerations
-- ⚡ **Minimize allocations** in hot paths
-- ⚡ **Use connection pooling** for external calls
-- ⚡ **Avoid blocking operations** in request handlers
-- ⚡ **Profile performance** for critical changes
-
-#### Pull Request Process
-
-1. **Update documentation** if needed
-2. **Add tests** for new functionality
-3. **Ensure all tests pass**:
-   ```bash
-   go test ./...
-   ```
-4. **Run performance tests**:
-   ```bash
-   wrk -t4 -c400 -d30s http://localhost:8090
-   ```
-5. **Submit pull request** with clear description
-
-### Feature Requests
-
-We welcome feature requests! Please:
-
-1. **Check existing issues** first
-2. **Describe the use case** clearly
-3. **Provide implementation ideas** if possible
-4. **Consider performance impact**
-
-### Bug Reports
-
-When reporting bugs, please include:
-
-1. **Go version** and OS
-2. **Surikiti version** or commit hash
-3. **Configuration file** (sanitized)
-4. **Steps to reproduce**
-5. **Expected vs actual behavior**
-6. **Relevant logs** or error messages
-
----
-
 ## 🎯 Implementation Status
 
 ### ✅ Completed Features
@@ -1293,19 +926,6 @@ When reporting bugs, please include:
 - ✅ **TLS/SSL**: Auto-generated certificates and custom certificate support
 - ✅ **CORS Support**: Configurable Cross-Origin Resource Sharing
 
-#### Configuration & Management
-- ✅ **TOML Configuration**: Human-readable configuration files
-- ✅ **Multi-Protocol Configuration**: Protocol-specific settings
-- ✅ **TLS Auto-Generation**: Automatic self-signed certificate creation
-- ✅ **Structured Logging**: High-performance logging with zap
-- ✅ **Hot Reload**: Configuration updates without restart
-
-#### Testing & Benchmarking
-- ✅ **Protocol Testing Scripts**: Comprehensive testing for all protocols
-- ✅ **HTTP/2 Benchmarking**: Performance testing with wrk and curl
-- ✅ **Load Testing Tools**: Multiple benchmark scripts and configurations
-- ✅ **Backend Test Servers**: Python test servers for development
-
 ### 🔄 Protocol Support Matrix
 
 | Protocol | Status | Port | Features | Performance |
@@ -1314,416 +934,3 @@ When reporting bugs, please include:
 | **HTTP/2** | ✅ Complete | 8443 | Multiplexing, HPACK, Server Push | ~25% improvement |
 | **HTTP/3** | ✅ Complete | 8443 | QUIC, 0-RTT, Connection Migration | Lower latency |
 | **WebSocket** | ⚠️ Partial | 8090 | Real-time, Bidirectional | Limited by gnet |
-
-### 📊 Performance Achievements
-
-#### HTTP/1.1 Benchmarks
-- **Throughput**: 187,123 requests/sec
-- **Latency**: 2.15ms average
-- **Concurrency**: 400 connections
-- **Memory**: Low allocation, efficient GC
-
-#### HTTP/2 Improvements
-- **Multiplexing**: Multiple streams per connection
-- **Header Compression**: HPACK reduces overhead
-- **Server Push**: Proactive resource delivery
-- **Performance**: 25% improvement with concurrent requests
-
-#### HTTP/3 Benefits
-- **QUIC Transport**: UDP-based, faster connection establishment
-- **0-RTT**: Instant reconnection for repeat clients
-- **Connection Migration**: Survives network changes
-- **Reduced Latency**: Eliminates head-of-line blocking
-
-### 🛠️ Development Tools
-
-#### Testing Scripts
-- `test-protocols.sh`: Multi-protocol testing and validation
-- `benchmark-http2.sh`: HTTP/2 performance benchmarking
-- `simple-http2-test.sh`: Quick HTTP/1.1 vs HTTP/2 comparison
-- `run-http2-benchmark.sh`: Comprehensive HTTP/2 testing suite
-
-#### Benchmark Tools
-- **wrk**: HTTP/1.1 load testing with custom Lua scripts
-- **curl**: HTTP/2 and HTTP/3 protocol testing
-- **wscat**: WebSocket connection testing
-- **Custom Scripts**: Protocol-specific performance analysis
-
-### 🔧 Configuration Examples
-
-#### Basic Multi-Protocol Setup
-```toml
-[server]
-port = 8090              # HTTP/1.1 and WebSocket
-https_port = 8443        # HTTP/2 and HTTP/3
-
-[protocols]
-http2_enabled = true
-http3_enabled = true
-websocket_enabled = true
-
-[tls]
-auto_generate = true     # Auto-generate certificates
-```
-
-#### Production Configuration
-```toml
-[server]
-port = 80
-https_port = 443
-
-[protocols]
-http2_enabled = true
-http3_enabled = true
-websocket_enabled = true
-
-[tls]
-cert_file = "/etc/ssl/certs/domain.crt"
-key_file = "/etc/ssl/private/domain.key"
-auto_generate = false
-
-[load_balancer]
-algorithm = "least_connections"
-```
-
-### 🚀 Quick Start Summary
-
-1. **Start Backend Servers**: `./scripts/start-backends.sh`
-2. **Run Surikiti Proxy**: `go run main.go`
-3. **Test HTTP/1.1**: `curl http://localhost:8090/`
-4. **Test HTTP/2**: `curl --http2 -k https://localhost:8443/`
-5. **Test WebSocket**: `wscat -c ws://localhost:8090/ws`
-6. **Run Benchmarks**: `./scripts/simple-http2-test.sh`
-
-### 🚀 Future Enhancements
-
-#### Potential Improvements
-- 🔄 **Full WebSocket Support**: Complete gnet WebSocket implementation
-- 📊 **Prometheus Metrics**: Built-in metrics endpoint
-- 🔍 **Distributed Tracing**: OpenTelemetry integration
-- 🛡️ **Rate Limiting**: Request rate limiting and throttling
-- 🔐 **Authentication**: JWT and OAuth2 support
-- 📱 **Admin Dashboard**: Web-based management interface
-
----
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-#### 1. "bind: address already in use" Error
-
-**Problem**: Server fails to start with port binding error.
-
-**Symptoms**:
-```bash
-{"level":"FATAL","msg":"Failed to start gnet server","error":"bind: address already in use"}
-```
-
-**Solutions**:
-
-1. **Check for running processes**:
-   ```bash
-   # Check what's using the port
-   lsof -i :8086
-   
-   # Kill the process if needed
-   kill <PID>
-   ```
-
-2. **Race condition between servers** (Fixed in latest version):
-   - Issue occurred when WebSocket and HTTP servers started simultaneously
-   - **Solution**: Added startup synchronization with 100ms delay
-   - **Code fix**: Moved WebSocket server initialization outside goroutine
-
-3. **Port configuration conflicts**:
-   ```toml
-   [server]
-   port = 8086              # HTTP/1.1 port
-   websocket_port = 8088    # WebSocket port (must be different)
-   ```
-
-#### 2. "context deadline exceeded" Error
-
-**Problem**: Upstream requests timing out.
-
-**Symptoms**:
-```bash
-{"level":"ERROR","msg":"Upstream request failed","error":"context deadline exceeded"}
-```
-
-**Solutions**:
-
-1. **Increase timeout values**:
-   ```toml
-   [proxy]
-   request_timeout = "5s"     # Increased from 2s
-   response_timeout = "10s"   # Increased from 5s
-   ```
-
-2. **Optimize connection pooling**:
-   ```toml
-   [proxy]
-   max_idle_conns = 100
-   max_idle_conns_per_host = 20
-   max_conns_per_host = 100
-   idle_conn_timeout = "90s"
-   ```
-
-3. **Enable retry logic** (Built-in):
-   ```toml
-   [load_balancer]
-   max_retries = 3
-   timeout = "30s"
-   ```
-
-#### 3. HTTP/2 or HTTP/3 Not Working
-
-**Problem**: HTTPS protocols fail to start.
-
-**Symptoms**:
-```bash
-{"level":"ERROR","msg":"Failed to start HTTP/2 server","error":"listen tcp :8443: bind: address already in use"}
-```
-
-**Solutions**:
-
-1. **Check TLS certificate**:
-   ```bash
-   # Verify certificate files exist
-   ls -la server.crt server.key
-   
-   # Test certificate validity
-   openssl x509 -in server.crt -text -noout
-   ```
-
-2. **Enable auto-generation**:
-   ```toml
-   [tls]
-   cert_file = "server.crt"
-   key_file = "server.key"
-   auto_generate = true  # Auto-create if missing
-   ```
-
-3. **Check port availability**:
-   ```bash
-   # Check HTTPS port
-   lsof -i :8443
-   ```
-
-#### 4. WebSocket Connection Issues
-
-**Problem**: WebSocket connections fail or disconnect.
-
-**Symptoms**:
-- Connection refused
-- Unexpected disconnections
-- Upgrade failures
-
-**Solutions**:
-
-1. **Verify WebSocket configuration**:
-   ```toml
-   # config/websocket.toml
-   [server]
-   name = "websocket_only"
-   host = "0.0.0.0"
-   port = 9087
-   enabled = true
-   ```
-
-2. **Test WebSocket connectivity**:
-   ```bash
-   # Test WebSocket connection
-   wscat -c ws://localhost:9087
-   
-   # Alternative with websocat
-   websocat ws://127.0.0.1:9087
-   
-   # Test WebSocket upgrade with curl
-   curl -i -N -H "Connection: Upgrade" \
-        -H "Upgrade: websocket" \
-        -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
-        -H "Sec-WebSocket-Version: 13" \
-        http://localhost:9087/ws
-   ```
-
-3. **Check backend WebSocket support**:
-   ```bash
-   # Test backend directly
-   wscat -c ws://localhost:3004
-   
-   # Check if WebSocket backend is running
-   lsof -i :3004
-   ```
-
-4. **Verify server startup**:
-   ```bash
-   # Check if WebSocket server is running
-   lsof -i :9087
-   
-   # Check logs for WebSocket server
-   tail -f logs/surikiti_websocket.log
-   ```
-
-#### 5. High Memory Usage
-
-**Problem**: Memory consumption grows over time.
-
-**Solutions**:
-
-1. **Optimize buffer sizes**:
-   ```toml
-   [proxy]
-   buffer_size = 4096        # Reduce if memory constrained
-   max_body_size = 1048576   # 1MB limit
-   ```
-
-2. **Tune connection limits**:
-   ```toml
-   [proxy]
-   max_connections = 500     # Reduce for lower memory
-   max_idle_conns = 50
-   ```
-
-3. **Enable compression**:
-   ```toml
-   [proxy]
-   enable_compression = true  # Reduce bandwidth usage
-   ```
-
-### Performance Optimization
-
-#### 1. High-Concurrency Tuning
-
-```toml
-[proxy]
-max_connections = 2000
-max_conns_per_host = 200
-max_idle_conns = 200
-max_idle_conns_per_host = 50
-buffer_size = 8192
-keep_alive_timeout = "120s"
-```
-
-#### 2. Low-Latency Configuration
-
-```toml
-[proxy]
-request_timeout = "1s"
-response_timeout = "3s"
-buffer_size = 2048
-enable_compression = false  # Disable for lower latency
-```
-
-#### 3. Memory-Optimized Setup
-
-```toml
-[proxy]
-max_connections = 100
-max_body_size = 524288      # 512KB
-buffer_size = 2048
-max_idle_conns = 20
-```
-
-### Monitoring and Debugging
-
-#### 1. Enable Debug Logging
-
-```toml
-[logging]
-level = "debug"  # Detailed logging
-file = "debug.log"
-```
-
-#### 2. Monitor Key Metrics
-
-```bash
-# Request rate
-grep "Request proxied successfully" proxy.log | wc -l
-
-# Error rate
-grep "ERROR" proxy.log | wc -l
-
-# Average response time
-grep "duration_ms" proxy.log | jq -r '.duration_ms' | awk '{sum+=$1; count++} END {print "Avg:", sum/count "ms"}'
-
-# Backend health status
-grep "health check" proxy.log | tail -10
-```
-
-#### 3. Performance Profiling
-
-```bash
-# CPU profiling
-go tool pprof http://localhost:6060/debug/pprof/profile
-
-# Memory profiling
-go tool pprof http://localhost:6060/debug/pprof/heap
-
-# Goroutine analysis
-go tool pprof http://localhost:6060/debug/pprof/goroutine
-```
-
-### Recent Fixes and Improvements
-
-#### v1.2.0 - Race Condition Fix
-- **Issue**: "bind: address already in use" when WebSocket and HTTP ports differ
-- **Root Cause**: Race condition between WebSocket HTTP server and gnet server startup
-- **Solution**: Added startup synchronization with 100ms delay
-- **Impact**: Eliminated port binding conflicts in multi-server mode
-
-#### v1.1.0 - Timeout Optimization
-- **Issue**: "context deadline exceeded" errors under load
-- **Solution**: Implemented exponential backoff retry logic
-- **Improvements**: 
-  - Increased default timeouts
-  - Optimized connection pooling
-  - Added retry mechanism with backoff
-
-#### v1.0.0 - Initial Release
-- Multi-protocol support (HTTP/1.1, HTTP/2, HTTP/3, WebSocket)
-- High-performance architecture with gnet and fasthttp
-- Comprehensive load balancing algorithms
-- Auto-generated TLS certificates
-
----
-
-## 📄 License
-
-Surikiti is licensed under the [Apache License 2.0](LICENSE).
-
-### Third-Party Licenses
-
-This project includes software from third parties:
-
-- **gnet** (github.com/panjf2000/gnet/v2) - Apache License 2.0
-- **fasthttp** (github.com/valyala/fasthttp) - MIT License
-- **gorilla/websocket** (github.com/gorilla/websocket) - BSD 2-Clause License
-- **quic-go** (github.com/quic-go/quic-go) - MIT License
-- **zap** (go.uber.org/zap) - MIT License
-- **viper** (github.com/spf13/viper) - MIT License
-- **lumberjack** (gopkg.in/natefinch/lumberjack.v2) - MIT License
-
-See [NOTICE](NOTICE) file for detailed copyright information.
-
-### Patent Grant
-
-The Apache License 2.0 includes an explicit patent grant, providing protection against patent litigation for users of this software.
-
-### Commercial Use
-
-This software can be used for commercial purposes under the terms of the Apache License 2.0. No additional permissions are required.
-
-## 🙏 Acknowledgments
-
-- **gnet team** for the excellent networking framework
-- **fasthttp team** for the high-performance HTTP library
-- **Uber** for the zap logging library
-- **Go community** for the amazing ecosystem
-
----
-
-**Built with ❤️ using Go**
-
-For questions, issues, or contributions, please visit our [GitHub repository](https://github.com/your-org/surikiti).
