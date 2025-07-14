@@ -27,11 +27,11 @@ type ProxyServer struct {
 func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
 	// Create fasthttp client optimized for high concurrency
 	client := &fasthttp.Client{
-		ReadTimeout:                   time.Second * 2, // Reduced timeout
-		WriteTimeout:                  time.Second * 2, // Reduced timeout
+		ReadTimeout:                   time.Second * 2,  // Reduced timeout
+		WriteTimeout:                  time.Second * 2,  // Reduced timeout
 		MaxIdleConnDuration:           time.Second * 10, // Increased for connection reuse
-		MaxConnDuration:               time.Minute * 2, // Longer duration for efficiency
-		MaxConnsPerHost:               100, // Increased for high concurrency
+		MaxConnDuration:               time.Minute * 2,  // Longer duration for efficiency
+		MaxConnsPerHost:               100,              // Increased for high concurrency
 		DisableHeaderNamesNormalizing: false,
 		DisablePathNormalizing:        false,
 		RetryIf: func(request *fasthttp.Request) bool {
@@ -116,7 +116,7 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	}
 
 	bufReader := bufio.NewReader(bytes.NewReader(reqData))
-	if err := req.Read(bufReader); err != nil {
+	if readErr := req.Read(bufReader); readErr != nil {
 		ps.sendErrorResponse(c, fasthttp.StatusBadRequest, "Bad Request")
 		return gnet.None
 	}
@@ -152,8 +152,6 @@ func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 
 	return gnet.None
 }
-
-
 
 // handleCORS adds CORS headers to the response if CORS is enabled
 func (ps *ProxyServer) handleCORS(req *fasthttp.Request, c gnet.Conn) bool {
@@ -263,13 +261,13 @@ func (ps *ProxyServer) writeResponse(c gnet.Conn, resp *fasthttp.Response) error
 	body := resp.Body()
 	estimatedSize := 1024 + len(body) // Larger header estimate + body
 	buf := make([]byte, 0, estimatedSize)
-	
+
 	// Status line
 	buf = append(buf, fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode(), fasthttp.StatusMessage(resp.StatusCode()))...)
-	
+
 	// Keep connection alive for better performance
 	buf = append(buf, "Connection: keep-alive\r\n"...)
-	
+
 	// Headers
 	resp.Header.VisitAll(func(key, value []byte) {
 		// Skip connection header to avoid conflicts
@@ -280,15 +278,15 @@ func (ps *ProxyServer) writeResponse(c gnet.Conn, resp *fasthttp.Response) error
 			buf = append(buf, "\r\n"...)
 		}
 	})
-	
+
 	// Content-Length if not present
 	if len(resp.Header.Peek("Content-Length")) == 0 {
 		buf = append(buf, fmt.Sprintf("Content-Length: %d\r\n", len(body))...)
 	}
-	
+
 	// End of headers
 	buf = append(buf, "\r\n"...)
-	
+
 	// Body
 	buf = append(buf, body...)
 
