@@ -194,6 +194,32 @@ if websocketPort != httpPort {
 - **Automatic failover** for unhealthy servers
 - **Graceful recovery** when servers become healthy again
 
+### 🛡️ Graceful Shutdown
+- **Signal handling** for SIGINT (Ctrl+C) and SIGTERM
+- **Ordered shutdown sequence** to prevent data loss
+- **Connection draining** with configurable timeout (30s)
+- **Resource cleanup** for all server components
+- **Zero-downtime deployments** with proper process management
+- **Health check termination** to stop monitoring gracefully
+- **HTTP/2 and HTTP/3 server shutdown** with context timeout
+- **WebSocket connection cleanup** for active sessions
+
+#### Shutdown Sequence
+1. **Signal Reception**: Capture SIGINT/SIGTERM signals
+2. **gnet Engine Stop**: Gracefully stop the main HTTP server
+3. **HTTP Server Shutdown**: Close HTTP and WebSocket servers
+4. **Health Check Stop**: Terminate background health monitoring
+5. **Connection Cleanup**: Close all client connections and pools
+6. **Resource Release**: Free allocated memory and file handles
+7. **Timeout Protection**: Force exit after 30 seconds if needed
+
+```bash
+# Graceful shutdown examples
+kill -TERM <pid>     # Send SIGTERM signal
+kill -INT <pid>      # Send SIGINT signal (Ctrl+C)
+pkill -TERM surikiti # Shutdown by process name
+```
+
 ### 🌐 CORS Support
 - **Configurable CORS policies** for cross-origin requests
 - **Preflight request handling** for complex CORS scenarios

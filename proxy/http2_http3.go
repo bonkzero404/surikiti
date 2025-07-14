@@ -109,6 +109,28 @@ func (h *HTTP2HTTP3Server) StartHTTP3Server() error {
 	return h.http3Server.ListenAndServe()
 }
 
+func (h *HTTP2HTTP3Server) Shutdown(ctx context.Context) error {
+	var err error
+	
+	if h.http2Server != nil {
+		h.logger.Info("Shutting down HTTP/2 server")
+		if shutdownErr := h.http2Server.Shutdown(ctx); shutdownErr != nil {
+			h.logger.Error("Error shutting down HTTP/2 server", zap.Error(shutdownErr))
+			err = shutdownErr
+		}
+	}
+	
+	if h.http3Server != nil {
+		h.logger.Info("Shutting down HTTP/3 server")
+		if shutdownErr := h.http3Server.Close(); shutdownErr != nil {
+			h.logger.Error("Error shutting down HTTP/3 server", zap.Error(shutdownErr))
+			err = shutdownErr
+		}
+	}
+	
+	return err
+}
+
 func (h *HTTP2HTTP3Server) handleHTTP2Request(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("HTTP/2 request received", 
 		zap.String("method", r.Method),
@@ -229,28 +251,4 @@ func (h *HTTP2HTTP3Server) proxyRequest(w http.ResponseWriter, r *http.Request, 
 		zap.String("protocol", protocol),
 		zap.String("upstream", upstream.URL.String()),
 		zap.Int("status", resp.StatusCode))
-}
-
-func (h *HTTP2HTTP3Server) Shutdown(ctx context.Context) error {
-	var err error
-
-	if h.http2Server != nil {
-		h.logger.Info("Shutting down HTTP/2 server")
-		if shutdownErr := h.http2Server.Shutdown(ctx); shutdownErr != nil {
-			h.logger.Error("Failed to shutdown HTTP/2 server", zap.Error(shutdownErr))
-			err = shutdownErr
-		}
-	}
-
-	if h.http3Server != nil {
-		h.logger.Info("Shutting down HTTP/3 server")
-		if closeErr := h.http3Server.Close(); closeErr != nil {
-			h.logger.Error("Failed to close HTTP/3 server", zap.Error(closeErr))
-			if err == nil {
-				err = closeErr
-			}
-		}
-	}
-
-	return err
 }

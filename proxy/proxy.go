@@ -8,9 +8,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -30,6 +32,9 @@ type ProxyServer struct {
 	corsConfig   config.CORSConfig
 	websocketProxy *WebSocketProxy
 	http2http3Server *HTTP2HTTP3Server
+	engine       gnet.Engine
+	engineSet    bool
+	mu           sync.RWMutex
 }
 
 func NewProxyServer(lb *loadbalancer.LoadBalancer, wsLB *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
@@ -101,6 +106,11 @@ func NewProxyServer(lb *loadbalancer.LoadBalancer, wsLB *loadbalancer.LoadBalanc
 }
 
 func (ps *ProxyServer) OnBoot(eng gnet.Engine) gnet.Action {
+	ps.mu.Lock()
+	ps.engine = eng
+	ps.engineSet = true
+	ps.mu.Unlock()
+	
 	ps.logger.Info("Proxy server started")
 	
 	// Start HTTP/2 server if enabled
@@ -162,6 +172,48 @@ func (ps *ProxyServer) OnClose(c gnet.Conn, err error) gnet.Action {
 
 func (ps *ProxyServer) OnShutdown(eng gnet.Engine) {
 	ps.logger.Info("Proxy server shutting down")
+}
+
+func (ps *ProxyServer) Shutdown(ctx context.Context) error {
+	ps.logger.Info("Starting proxy server shutdown")
+	
+	// Stop gnet engine
+	ps.mu.RLock()
+	engine := ps.engine
+	engineSet := ps.engineSet
+	ps.mu.RUnlock()
+	
+	if engineSet && !reflect.ValueOf(engine).IsNil() {
+		ps.logger.Info("Stopping gnet engine")
+		if err := engine.Stop(ctx); err != nil {
+			ps.logger.Error("Error stopping gnet engine", zap.Error(err))
+		}
+	}
+	
+	// Stop health checks
+	if ps.loadBalancer != nil {
+		ps.loadBalancer.StopHealthCheck()
+	}
+	
+	// Shutdown HTTP/2 and HTTP/3 servers
+	if ps.http2http3Server != nil {
+		if err := ps.http2http3Server.Shutdown(ctx); err != nil {
+			ps.logger.Error("Error shutting down HTTP/2/HTTP/3 servers", zap.Error(err))
+		}
+	}
+	
+	// Close fasthttp client connections
+	if ps.client != nil {
+		ps.client.CloseIdleConnections()
+	}
+	
+	// Close HTTP client connections
+	if ps.httpClient != nil {
+		ps.httpClient.CloseIdleConnections()
+	}
+	
+	ps.logger.Info("Proxy server shutdown completed")
+	return nil
 }
 
 func (ps *ProxyServer) OnTick() (delay time.Duration, action gnet.Action) {

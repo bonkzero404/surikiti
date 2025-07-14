@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,6 +41,11 @@ func main() {
 	}
 	defer logger.Sync()
 
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_ = ctx // Will be used in server startup
+
 	logger.Info("Starting Surikiti Reverse Proxy",
 		zap.String("version", "1.0.0"),
 		zap.String("config", *configPath))
@@ -61,6 +69,21 @@ func main() {
 
 	// Create proxy server
 	proxyServer := proxy.NewProxyServer(lb, wsLB, logger, cfg.Proxy, cfg.CORS)
+
+	// Server management structure
+	type ServerManager struct {
+		gnetEngine    gnet.Engine
+		httpServer    *http.Server
+		websocketServer *http.Server
+		mu            sync.RWMutex
+		shutdownChan  chan struct{}
+		gnetStarted   chan struct{}
+	}
+
+	serverManager := &ServerManager{
+		shutdownChan: make(chan struct{}),
+		gnetStarted:  make(chan struct{}),
+	}
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -89,6 +112,10 @@ func main() {
 			zap.Int("weight", upstream.Weight))
 	}
 
+	// Start servers with graceful shutdown support
+	var wg sync.WaitGroup
+	errorChan := make(chan error, 3)
+	
 	// Start server based on WebSocket configuration
 	if cfg.Proxy.EnableWebSocket {
 		websocketPort := cfg.Server.WebSocketPort
@@ -98,35 +125,37 @@ func main() {
 			// Use HTTP server for both HTTP and WebSocket on the same port
 			logger.Info("Using HTTP server for both HTTP and WebSocket", zap.Int("port", websocketPort))
 			
-			// Create HTTP server that handles both HTTP proxy and WebSocket
-			go func() {
-				mux := http.NewServeMux()
-				mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-					if proxyServer.IsWebSocketRequest(r) {
-						// Handle WebSocket upgrade
-						proxyServer.HandleWebSocketHTTP(w, r)
-					} else {
-						// Handle regular HTTP proxy
-						proxyServer.HandleHTTPProxy(w, r)
-					}
-				})
-				
-				server := &http.Server{
-					Addr:    serverAddr,
-					Handler: mux,
+			mux := http.NewServeMux()
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				if proxyServer.IsWebSocketRequest(r) {
+					// Handle WebSocket upgrade
+					proxyServer.HandleWebSocketHTTP(w, r)
+				} else {
+					// Handle regular HTTP proxy
+					proxyServer.HandleHTTPProxy(w, r)
 				}
-				
+			})
+			
+			serverManager.httpServer = &http.Server{
+				Addr:    serverAddr,
+				Handler: mux,
+				ReadTimeout:  cfg.Proxy.RequestTimeout,
+				WriteTimeout: cfg.Proxy.ResponseTimeout,
+				IdleTimeout:  cfg.Proxy.KeepAliveTimeout,
+			}
+			
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				logger.Info("Starting unified HTTP/WebSocket server", zap.String("address", serverAddr))
-				if err := server.ListenAndServe(); err != nil {
-					logger.Error("Failed to start unified server", zap.Error(err))
+				if err := serverManager.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					errorChan <- fmt.Errorf("unified server error: %w", err)
 				}
 			}()
 			
-			// Skip gnet server when using unified HTTP server
 			logger.Info("Unified HTTP/WebSocket server started successfully", zap.String("address", serverAddr))
 		} else {
 			// Use separate ports: gnet for HTTP, standard HTTP server for WebSocket
-			// Start WebSocket server first
 			websocketAddr := cfg.Server.Host + ":" + strconv.Itoa(websocketPort)
 			
 			mux := http.NewServeMux()
@@ -138,10 +167,20 @@ func main() {
 				}
 			})
 			
+			serverManager.websocketServer = &http.Server{
+				Addr:    websocketAddr,
+				Handler: mux,
+				ReadTimeout:  cfg.Proxy.RequestTimeout,
+				WriteTimeout: cfg.Proxy.ResponseTimeout,
+				IdleTimeout:  cfg.Proxy.KeepAliveTimeout,
+			}
+			
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				logger.Info("Starting WebSocket server", zap.String("address", websocketAddr))
-				if err := http.ListenAndServe(websocketAddr, mux); err != nil {
-					logger.Error("Failed to start WebSocket server", zap.Error(err))
+				if err := serverManager.websocketServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					errorChan <- fmt.Errorf("websocket server error: %w", err)
 				}
 			}()
 			
@@ -149,8 +188,11 @@ func main() {
 			time.Sleep(100 * time.Millisecond)
 			
 			// Start gnet server for HTTP proxy
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				logger.Info("Starting gnet HTTP server", zap.String("address", serverAddr))
+				close(serverManager.gnetStarted) // Signal that gnet is starting
 				if err := gnet.Run(proxyServer, "tcp://"+serverAddr,
 					gnet.WithMulticore(true),
 					gnet.WithReusePort(true),
@@ -162,7 +204,14 @@ func main() {
 					gnet.WithWriteBufferCap(16*1024),
 					gnet.WithLockOSThread(true),
 				); err != nil {
-					logger.Fatal("Failed to start gnet server", zap.Error(err))
+					// Only report error if it's not due to graceful shutdown
+					select {
+					case <-serverManager.shutdownChan:
+						// Graceful shutdown, not an error
+						logger.Info("Gnet server stopped gracefully")
+					default:
+						errorChan <- fmt.Errorf("gnet server error: %w", err)
+					}
 				}
 			}()
 			
@@ -172,7 +221,11 @@ func main() {
 		}
 	} else {
 		// WebSocket disabled, use only gnet for HTTP
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+			logger.Info("Starting gnet HTTP server", zap.String("address", serverAddr))
+			close(serverManager.gnetStarted) // Signal that gnet is starting
 			if err := gnet.Run(proxyServer, "tcp://"+serverAddr,
 				gnet.WithMulticore(true),
 				gnet.WithReusePort(true),
@@ -184,7 +237,14 @@ func main() {
 				gnet.WithWriteBufferCap(16*1024),
 				gnet.WithLockOSThread(true),
 			); err != nil {
-				logger.Fatal("Failed to start gnet server", zap.Error(err))
+				// Only report error if it's not due to graceful shutdown
+				select {
+				case <-serverManager.shutdownChan:
+					// Graceful shutdown, not an error
+					logger.Info("Gnet server stopped gracefully")
+				default:
+					errorChan <- fmt.Errorf("gnet server error: %w", err)
+				}
 			}
 		}()
 		
@@ -193,12 +253,71 @@ func main() {
 
 
 
-	// Wait for shutdown signal
-	<-sigChan
-	logger.Info("Shutdown signal received, stopping server...")
+	// Wait for gnet to start before proceeding
+	<-serverManager.gnetStarted
 
-	// Graceful shutdown
-	logger.Info("Server stopped gracefully")
+	// Wait for shutdown signal or server error
+	select {
+	case <-sigChan:
+		logger.Info("Shutdown signal received, stopping server...")
+	case err := <-errorChan:
+		logger.Error("Server error occurred, shutting down", zap.Error(err))
+		cancel()
+	}
+
+	// Graceful shutdown with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	logger.Info("Starting graceful shutdown...")
+
+	// Close shutdown channel to signal all components
+	close(serverManager.shutdownChan)
+
+	// Shutdown proxy server first (includes gnet engine)
+	if err := proxyServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("Error shutting down proxy server", zap.Error(err))
+	}
+
+	// Shutdown HTTP servers
+	if serverManager.httpServer != nil {
+		logger.Info("Shutting down HTTP server")
+		if err := serverManager.httpServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Error shutting down HTTP server", zap.Error(err))
+		}
+	}
+
+	if serverManager.websocketServer != nil {
+		logger.Info("Shutting down WebSocket server")
+		if err := serverManager.websocketServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Error shutting down WebSocket server", zap.Error(err))
+		}
+	}
+
+	// Stop WebSocket load balancer health checks
+	if wsLB != nil {
+		wsLB.StopHealthCheck()
+	}
+
+	// Signal all goroutines to stop
+	cancel()
+
+	// Wait for all servers to stop with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logger.Info("All servers stopped gracefully")
+	case <-time.After(35 * time.Second):
+		logger.Warn("Graceful shutdown timeout exceeded, forcing exit")
+	}
+
+	logger.Info("Server shutdown completed")
+	os.Exit(0)
 }
 
 func setupLogger(logConfig config.LoggingConfig) (*zap.Logger, error) {

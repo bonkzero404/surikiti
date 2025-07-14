@@ -27,6 +27,8 @@ type LoadBalancer struct {
 	mu        sync.RWMutex
 	timeout   time.Duration
 	retries   int
+	healthTicker *time.Ticker
+	shutdownChan chan struct{}
 }
 
 func NewLoadBalancer(upstreamConfigs []config.UpstreamConfig, lbConfig config.LoadBalancerConfig) (*LoadBalancer, error) {
@@ -194,12 +196,27 @@ func (lb *LoadBalancer) MarkHealthy(upstream *Upstream) {
 }
 
 func (lb *LoadBalancer) StartHealthCheck() {
-	ticker := time.NewTicker(30 * time.Second)
+	lb.healthTicker = time.NewTicker(30 * time.Second)
+	lb.shutdownChan = make(chan struct{})
 	go func() {
-		for range ticker.C {
-			lb.performHealthCheck()
+		for {
+			select {
+			case <-lb.healthTicker.C:
+				lb.performHealthCheck()
+			case <-lb.shutdownChan:
+				return
+			}
 		}
 	}()
+}
+
+func (lb *LoadBalancer) StopHealthCheck() {
+	if lb.healthTicker != nil {
+		lb.healthTicker.Stop()
+	}
+	if lb.shutdownChan != nil {
+		close(lb.shutdownChan)
+	}
 }
 
 func (lb *LoadBalancer) performHealthCheck() {
