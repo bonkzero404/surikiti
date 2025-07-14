@@ -1,4 +1,4 @@
-package proxy
+package main
 
 import (
 	"fmt"
@@ -10,19 +10,18 @@ import (
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
-	"surikiti/config"
-	"surikiti/loadbalancer"
+
 )
 
 type WebSocketProxy struct {
-	loadBalancer   *loadbalancer.LoadBalancer
-	wsLoadBalancer *loadbalancer.LoadBalancer
+	loadBalancer   *LoadBalancer
+	wsLoadBalancer *LoadBalancer
 	logger         *zap.Logger
-	config         config.ProxyConfig
+	config         ProxyConfig
 	upgrader       websocket.Upgrader
 }
 
-func NewWebSocketProxy(lb *loadbalancer.LoadBalancer, wsLB *loadbalancer.LoadBalancer, logger *zap.Logger, cfg config.ProxyConfig) *WebSocketProxy {
+func NewWebSocketProxy(lb *LoadBalancer, wsLB *LoadBalancer, logger *zap.Logger, cfg ProxyConfig) *WebSocketProxy {
 	return &WebSocketProxy{
 		loadBalancer:   lb,
 		wsLoadBalancer: wsLB,

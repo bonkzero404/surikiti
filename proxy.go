@@ -1,4 +1,4 @@
-package proxy
+package main
 
 import (
 	"context"
@@ -12,18 +12,17 @@ import (
 	"github.com/valyala/fasthttp"
 	"go.uber.org/zap"
 
-	"surikiti/config"
-	"surikiti/loadbalancer"
+
 )
 
 type ProxyServer struct {
 	mu               sync.RWMutex
-	loadBalancer     *loadbalancer.LoadBalancer
+	loadBalancer     *LoadBalancer
 	logger           *zap.Logger
 	client           *fasthttp.Client
 	httpClient       *http.Client
-	proxyConfig      config.ProxyConfig
-	corsConfig       config.CORSConfig
+	proxyConfig      ProxyConfig
+	corsConfig       CORSConfig
 	websocketHandler *WebSocketHandler
 	httpHandler      *HTTPHandler
 	http2http3Server *HTTP2HTTP3Server
@@ -31,7 +30,7 @@ type ProxyServer struct {
 	engineSet        bool
 }
 
-func NewProxyServer(lb *loadbalancer.LoadBalancer, wsLB *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
+func NewProxyServer(lb *LoadBalancer, wsLB *LoadBalancer, logger *zap.Logger, proxyConfig ProxyConfig, corsConfig CORSConfig) *ProxyServer {
 	// Create fasthttp client optimized for stability
 	client := &fasthttp.Client{
 		ReadTimeout:                   proxyConfig.RequestTimeout,

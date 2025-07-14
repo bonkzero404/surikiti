@@ -1,4 +1,4 @@
-package logger
+package main
 
 import (
 	"fmt"
@@ -7,12 +7,10 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
-
-	"surikiti/config"
 )
 
 // SetupLogger creates a logger with the specified configuration
-func SetupLogger(loggingConfig config.LoggingConfig, serverName string) (*zap.Logger, error) {
+func SetupLogger(loggingConfig LoggingConfig, serverName string) (*zap.Logger, error) {
 	// Create log file name
 	logFile := fmt.Sprintf("logs/%s.log", serverName)
 	if loggingConfig.File != "" {

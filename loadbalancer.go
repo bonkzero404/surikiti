@@ -1,4 +1,4 @@
-package loadbalancer
+package main
 
 import (
 	"fmt"
@@ -7,8 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"surikiti/config"
 )
 
 type Upstream struct {
@@ -31,7 +29,7 @@ type LoadBalancer struct {
 	shutdownChan chan struct{}
 }
 
-func NewLoadBalancer(upstreamConfigs []config.UpstreamConfig, lbConfig config.LoadBalancerConfig) (*LoadBalancer, error) {
+func NewLoadBalancer(upstreamConfigs []UpstreamConfig, lbConfig LoadBalancerConfig) (*LoadBalancer, error) {
 	upstreams := make([]*Upstream, 0, len(upstreamConfigs))
 
 	for _, uc := range upstreamConfigs {
@@ -59,7 +57,7 @@ func NewLoadBalancer(upstreamConfigs []config.UpstreamConfig, lbConfig config.Lo
 }
 
 // NewWebSocketLoadBalancer creates a new load balancer specifically for WebSocket upstreams
-func NewWebSocketLoadBalancer(wsUpstreamConfigs []config.UpstreamConfig, lbConfig config.LoadBalancerConfig) (*LoadBalancer, error) {
+func NewWebSocketLoadBalancer(wsUpstreamConfigs []UpstreamConfig, lbConfig LoadBalancerConfig) (*LoadBalancer, error) {
 	upstreams := make([]*Upstream, 0, len(wsUpstreamConfigs))
 
 	for _, uc := range wsUpstreamConfigs {

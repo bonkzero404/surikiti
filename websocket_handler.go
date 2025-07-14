@@ -1,12 +1,11 @@
-package proxy
+package main
 
 import (
 	"net/http"
 
 	"go.uber.org/zap"
 
-	"surikiti/config"
-	"surikiti/loadbalancer"
+
 )
 
 // WebSocketHandler handles WebSocket proxy requests
@@ -16,11 +15,11 @@ type WebSocketHandler struct {
 }
 
 // NewWebSocketHandler creates a new WebSocket handler
-func NewWebSocketHandler(wsLB *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig) *WebSocketHandler {
+func NewWebSocketHandler(lb *LoadBalancer, logger *zap.Logger, proxyConfig ProxyConfig) *WebSocketHandler {
 	var wsProxy *WebSocketProxy
-	if wsLB != nil {
+	if lb != nil {
 		// Use the same load balancer for both parameters since we only have one
-		wsProxy = NewWebSocketProxy(wsLB, wsLB, logger, proxyConfig)
+		wsProxy = NewWebSocketProxy(lb, lb, logger, proxyConfig)
 	}
 
 	return &WebSocketHandler{

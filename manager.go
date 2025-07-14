@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"context"
@@ -9,20 +9,15 @@ import (
 
 	"github.com/panjf2000/gnet/v2"
 	"go.uber.org/zap"
-
-	"surikiti/config"
-	"surikiti/loadbalancer"
-	"surikiti/logger"
-	"surikiti/proxy"
 )
 
 // ServerInstance represents a single server instance with its own configuration and load balancers
 type ServerInstance struct {
 	name            string
-	config          config.ServerConfig
-	loadBalancer    *loadbalancer.LoadBalancer
-	wsLoadBalancer  *loadbalancer.LoadBalancer
-	proxyServer     *proxy.ProxyServer
+	config          ServerConfig
+	loadBalancer    *LoadBalancer
+	wsLoadBalancer  *LoadBalancer
+	proxyServer     *ProxyServer
 	httpServer      *http.Server
 	websocketServer *http.Server
 	gnetStarted     chan struct{}
@@ -44,7 +39,7 @@ func NewMultiServerManager() *MultiServerManager {
 }
 
 // CreateServerInstance creates a new server instance with its own load balancers
-func (msm *MultiServerManager) CreateServerInstance(serverCfg config.ServerConfig, cfg *config.Config, mainLogger *zap.Logger) (*ServerInstance, error) {
+func (msm *MultiServerManager) CreateServerInstance(serverCfg ServerConfig, cfg *Config, mainLogger *zap.Logger) (*ServerInstance, error) {
 	// Get upstreams for this server
 	upstreams := cfg.GetUpstreamsByNames(serverCfg.Upstreams)
 	websocketUpstreams := cfg.GetWebSocketUpstreamsByNames(serverCfg.Upstreams)
@@ -55,26 +50,26 @@ func (msm *MultiServerManager) CreateServerInstance(serverCfg config.ServerConfi
 	corsConfig := cfg.GetCORSConfig(serverCfg.Name)
 
 	// Create HTTP load balancer for this server
-	lb, err := loadbalancer.NewLoadBalancer(upstreams, lbConfig)
+	lb, err := NewLoadBalancer(upstreams, lbConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP load balancer for server %s: %w", serverCfg.Name, err)
 	}
 
 	// Create WebSocket load balancer for this server
-	wsLB, err := loadbalancer.NewLoadBalancer(websocketUpstreams, lbConfig)
+	wsLB, err := NewLoadBalancer(websocketUpstreams, lbConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebSocket load balancer for server %s: %w", serverCfg.Name, err)
 	}
 
 	// Setup per-server logger
 	loggingConfig := cfg.GetLoggingConfig(serverCfg.Name)
-	serverLogger, err := logger.SetupLogger(loggingConfig, serverCfg.Name)
+	serverLogger, err := SetupLogger(loggingConfig, serverCfg.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup logger for server %s: %w", serverCfg.Name, err)
 	}
 
 	// Create proxy server
-	proxyServer := proxy.NewProxyServer(lb, wsLB, serverLogger, proxyConfig, corsConfig)
+	proxyServer := NewProxyServer(lb, wsLB, serverLogger, proxyConfig, corsConfig)
 
 	instance := &ServerInstance{
 		name:           serverCfg.Name,

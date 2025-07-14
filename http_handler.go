@@ -1,4 +1,4 @@
-package proxy
+package main
 
 import (
 	"bufio"
@@ -15,23 +15,20 @@ import (
 	"github.com/valyala/fasthttp"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
-
-	"surikiti/config"
-	"surikiti/loadbalancer"
 )
 
 // HTTPHandler handles HTTP proxy requests
 type HTTPHandler struct {
-	loadBalancer *loadbalancer.LoadBalancer
+	loadBalancer *LoadBalancer
 	client       *fasthttp.Client
 	httpClient   *http.Client
 	logger       *zap.Logger
-	proxyConfig  config.ProxyConfig
-	corsConfig   config.CORSConfig
+	proxyConfig  ProxyConfig
+	corsConfig   CORSConfig
 }
 
 // NewHTTPHandler creates a new HTTP handler
-func NewHTTPHandler(lb *loadbalancer.LoadBalancer, client *fasthttp.Client, httpClient *http.Client, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *HTTPHandler {
+func NewHTTPHandler(lb *LoadBalancer, client *fasthttp.Client, httpClient *http.Client, logger *zap.Logger, proxyConfig ProxyConfig, corsConfig CORSConfig) *HTTPHandler {
 	return &HTTPHandler{
 		loadBalancer: lb,
 		client:       client,
@@ -91,24 +88,24 @@ func (h *HTTPHandler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 
 	var resp *http.Response
 	maxRetries := 3
-	
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		resp, err = client.Do(upstreamReq)
 		if err == nil {
 			break
 		}
-		
+
 		// Log retry attempt
 		if attempt < maxRetries {
-			h.logger.Warn("Retrying request to upstream", 
+			h.logger.Warn("Retrying request to upstream",
 				zap.Error(err),
 				zap.String("upstream", upstream.URL.String()),
 				zap.Int("attempt", attempt+1),
 				zap.Int("max_retries", maxRetries))
-			
+
 			// Brief delay before retry
 			time.Sleep(time.Millisecond * 100 * time.Duration(attempt+1))
-			
+
 			// Create new request for retry (body might be consumed)
 			if r.Body != nil {
 				r.Body.Close()
@@ -126,9 +123,9 @@ func (h *HTTPHandler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 			upstreamReq.Header.Set("X-Forwarded-Host", r.Host)
 		}
 	}
-	
+
 	if err != nil {
-		h.logger.Error("Failed to proxy request to upstream after retries", 
+		h.logger.Error("Failed to proxy request to upstream after retries",
 			zap.Error(err),
 			zap.String("upstream", upstream.URL.String()),
 			zap.Int("attempts", maxRetries+1))
@@ -167,7 +164,7 @@ func (h *HTTPHandler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("Failed to copy response body", zap.Error(err))
 	}
 
-	h.logger.Debug("Request proxied successfully", 
+	h.logger.Debug("Request proxied successfully",
 		zap.String("upstream", upstream.URL.String()),
 		zap.Int("status", resp.StatusCode))
 }
@@ -283,7 +280,7 @@ func (h *HTTPHandler) handleCORS(req *fasthttp.Request, c gnet.Conn) bool {
 	return false
 }
 
-func (h *HTTPHandler) forwardRequest(req *fasthttp.Request, upstream *loadbalancer.Upstream) (*fasthttp.Response, error) {
+func (h *HTTPHandler) forwardRequest(req *fasthttp.Request, upstream *Upstream) (*fasthttp.Response, error) {
 	// Create fasthttp response
 	fastResp := fasthttp.AcquireResponse()
 
