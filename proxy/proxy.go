@@ -3,7 +3,10 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -22,13 +25,14 @@ type ProxyServer struct {
 	loadBalancer *loadbalancer.LoadBalancer
 	logger       *zap.Logger
 	client       *fasthttp.Client
+	httpClient   *http.Client // Reusable HTTP client for standard HTTP proxy
 	proxyConfig  config.ProxyConfig
 	corsConfig   config.CORSConfig
 	websocketProxy *WebSocketProxy
 	http2http3Server *HTTP2HTTP3Server
 }
 
-func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
+func NewProxyServer(lb *loadbalancer.LoadBalancer, wsLB *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConfig config.ProxyConfig, corsConfig config.CORSConfig) *ProxyServer {
 	// Create fasthttp client optimized for stability
 	client := &fasthttp.Client{
 		ReadTimeout:                   proxyConfig.RequestTimeout,
@@ -51,17 +55,36 @@ func NewProxyServer(lb *loadbalancer.LoadBalancer, logger *zap.Logger, proxyConf
 		}).Dial,
 	}
 
+	// Create reusable HTTP client for standard HTTP proxy
+	httpClient := &http.Client{
+		Timeout: proxyConfig.RequestTimeout * 2, // Give more time for the overall request
+		Transport: &http.Transport{
+			MaxIdleConns:        proxyConfig.MaxIdleConns,
+			MaxIdleConnsPerHost: proxyConfig.MaxIdleConnsPerHost,
+			MaxConnsPerHost:     proxyConfig.MaxConnsPerHost,
+			IdleConnTimeout:     proxyConfig.IdleConnTimeout,
+			DialContext: (&net.Dialer{
+				Timeout:   proxyConfig.RequestTimeout,
+				KeepAlive: proxyConfig.KeepAliveTimeout,
+			}).DialContext,
+			TLSHandshakeTimeout: proxyConfig.RequestTimeout,
+			DisableKeepAlives:   false, // Enable keep-alives for better performance
+			ForceAttemptHTTP2:   false, // Disable HTTP/2 for upstream connections
+		},
+	}
+
 	ps := &ProxyServer{
 		loadBalancer: lb,
 		logger:       logger,
 		client:       client,
+		httpClient:   httpClient,
 		proxyConfig:  proxyConfig,
 		corsConfig:   corsConfig,
 	}
 
 	// Initialize WebSocket proxy if enabled
 	if proxyConfig.EnableWebSocket {
-		ps.websocketProxy = NewWebSocketProxy(lb, logger, proxyConfig)
+		ps.websocketProxy = NewWebSocketProxy(lb, wsLB, logger, proxyConfig)
 		logger.Info("WebSocket proxy enabled")
 	}
 
@@ -173,6 +196,136 @@ func (ps *ProxyServer) HandleWebSocketHTTP(w http.ResponseWriter, r *http.Reques
 		ps.logger.Error("WebSocket proxy error", zap.Error(err))
 		// Don't write error response here as HandleWebSocket may have already written to the connection
 	}
+}
+
+// HandleHTTPProxy handles regular HTTP proxy requests using standard HTTP server
+func (ps *ProxyServer) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
+	// Get upstream server
+	upstream := ps.loadBalancer.GetUpstream()
+	if upstream == nil {
+		ps.logger.Error("No healthy upstream available")
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Increment connection count
+	ps.loadBalancer.IncreaseConnections(upstream)
+	defer ps.loadBalancer.DecreaseConnections(upstream)
+
+	// Use the reusable HTTP client
+	client := ps.httpClient
+
+	// Create upstream request
+	upstreamURL := upstream.URL.String() + r.URL.Path
+	if r.URL.RawQuery != "" {
+		upstreamURL += "?" + r.URL.RawQuery
+	}
+
+	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
+	if err != nil {
+		ps.logger.Error("Failed to create upstream request", zap.Error(err))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers
+	for name, values := range r.Header {
+		for _, value := range values {
+			upstreamReq.Header.Add(name, value)
+		}
+	}
+
+	// Add forwarding headers
+	upstreamReq.Header.Set("X-Forwarded-For", r.RemoteAddr)
+	upstreamReq.Header.Set("X-Forwarded-Proto", "http")
+	upstreamReq.Header.Set("X-Forwarded-Host", r.Host)
+
+	// Make request to upstream with retry logic
+	ctx, cancel := context.WithTimeout(r.Context(), ps.proxyConfig.RequestTimeout*2)
+	defer cancel()
+	upstreamReq = upstreamReq.WithContext(ctx)
+
+	var resp *http.Response
+	maxRetries := 3
+	
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err = client.Do(upstreamReq)
+		if err == nil {
+			break
+		}
+		
+		// Log retry attempt
+		if attempt < maxRetries {
+			ps.logger.Warn("Retrying request to upstream", 
+				zap.Error(err),
+				zap.String("upstream", upstream.URL.String()),
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", maxRetries))
+			
+			// Brief delay before retry
+			time.Sleep(time.Millisecond * 100 * time.Duration(attempt+1))
+			
+			// Create new request for retry (body might be consumed)
+			if r.Body != nil {
+				r.Body.Close()
+			}
+			upstreamReq, _ = http.NewRequestWithContext(ctx, r.Method, upstreamURL, r.Body)
+			// Copy headers again
+			for name, values := range r.Header {
+				for _, value := range values {
+					upstreamReq.Header.Add(name, value)
+				}
+			}
+			// Add forwarding headers again
+			upstreamReq.Header.Set("X-Forwarded-For", r.RemoteAddr)
+			upstreamReq.Header.Set("X-Forwarded-Proto", "http")
+			upstreamReq.Header.Set("X-Forwarded-Host", r.Host)
+		}
+	}
+	
+	if err != nil {
+		ps.logger.Error("Failed to proxy request to upstream after retries", 
+			zap.Error(err),
+			zap.String("upstream", upstream.URL.String()),
+			zap.Int("attempts", maxRetries+1))
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Add CORS headers if enabled
+	if ps.corsConfig.Enabled {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if len(ps.corsConfig.ExposedHeaders) > 0 {
+			w.Header().Set("Access-Control-Expose-Headers", strings.Join(ps.corsConfig.ExposedHeaders, ", "))
+		}
+		if ps.corsConfig.AllowCredentials {
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+	}
+
+	// Copy response headers
+	for name, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+
+	// Add server header
+	w.Header().Set("Server", "Surikiti-Proxy/1.0")
+	w.Header().Set("X-Proxy-Protocol", "HTTP/1.1")
+
+	// Write status code
+	w.WriteHeader(resp.StatusCode)
+
+	// Copy response body
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		ps.logger.Error("Failed to copy response body", zap.Error(err))
+	}
+
+	ps.logger.Debug("Request proxied successfully", 
+		zap.String("upstream", upstream.URL.String()),
+		zap.Int("status", resp.StatusCode))
 }
 
 func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {

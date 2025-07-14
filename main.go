@@ -42,18 +42,25 @@ func main() {
 		zap.String("version", "1.0.0"),
 		zap.String("config", *configPath))
 
-	// Create load balancer
+	// Create HTTP load balancer
 	lb, err := loadbalancer.NewLoadBalancer(cfg.Upstreams, cfg.LoadBalancer)
 	if err != nil {
-		logger.Fatal("Failed to create load balancer", zap.Error(err))
+		logger.Fatal("Failed to create HTTP load balancer", zap.Error(err))
+	}
+
+	// Create WebSocket load balancer
+	wsLB, err := loadbalancer.NewWebSocketLoadBalancer(cfg.WebSocketUpstreams, cfg.LoadBalancer)
+	if err != nil {
+		logger.Fatal("Failed to create WebSocket load balancer", zap.Error(err))
 	}
 
 	// Start health checks
 	lb.StartHealthCheck()
+	wsLB.StartHealthCheck()
 	logger.Info("Health check started for upstream servers")
 
 	// Create proxy server
-	proxyServer := proxy.NewProxyServer(lb, logger, cfg.Proxy, cfg.CORS)
+	proxyServer := proxy.NewProxyServer(lb, wsLB, logger, cfg.Proxy, cfg.CORS)
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -66,18 +73,60 @@ func main() {
 		zap.String("load_balancer_method", cfg.LoadBalancer.Method),
 		zap.Int("upstream_count", len(cfg.Upstreams)))
 
-	// Log upstream servers
+	// Log HTTP upstream servers
 	for _, upstream := range cfg.Upstreams {
-		logger.Info("Registered upstream server",
+		logger.Info("Registered HTTP upstream server",
 			zap.String("name", upstream.Name),
 			zap.String("url", upstream.URL),
 			zap.Int("weight", upstream.Weight))
 	}
 
-	// Start WebSocket server if enabled
+	// Log WebSocket upstream servers
+	for _, upstream := range cfg.WebSocketUpstreams {
+		logger.Info("Registered WebSocket upstream server",
+			zap.String("name", upstream.Name),
+			zap.String("url", upstream.URL),
+			zap.Int("weight", upstream.Weight))
+	}
+
+	// Start server based on WebSocket configuration
 	if cfg.Proxy.EnableWebSocket {
-		go func() {
-			websocketPort := cfg.Server.WebSocketPort
+		websocketPort := cfg.Server.WebSocketPort
+		
+		// Check if WebSocket port is the same as HTTP port
+		if websocketPort == cfg.Server.Port {
+			// Use HTTP server for both HTTP and WebSocket on the same port
+			logger.Info("Using HTTP server for both HTTP and WebSocket", zap.Int("port", websocketPort))
+			
+			// Create HTTP server that handles both HTTP proxy and WebSocket
+			go func() {
+				mux := http.NewServeMux()
+				mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+					if proxyServer.IsWebSocketRequest(r) {
+						// Handle WebSocket upgrade
+						proxyServer.HandleWebSocketHTTP(w, r)
+					} else {
+						// Handle regular HTTP proxy
+						proxyServer.HandleHTTPProxy(w, r)
+					}
+				})
+				
+				server := &http.Server{
+					Addr:    serverAddr,
+					Handler: mux,
+				}
+				
+				logger.Info("Starting unified HTTP/WebSocket server", zap.String("address", serverAddr))
+				if err := server.ListenAndServe(); err != nil {
+					logger.Error("Failed to start unified server", zap.Error(err))
+				}
+			}()
+			
+			// Skip gnet server when using unified HTTP server
+			logger.Info("Unified HTTP/WebSocket server started successfully", zap.String("address", serverAddr))
+		} else {
+			// Use separate ports: gnet for HTTP, standard HTTP server for WebSocket
+			// Start WebSocket server first
 			websocketAddr := cfg.Server.Host + ":" + strconv.Itoa(websocketPort)
 			
 			mux := http.NewServeMux()
@@ -89,31 +138,60 @@ func main() {
 				}
 			})
 			
-			logger.Info("Starting WebSocket server", zap.String("address", websocketAddr))
-			if err := http.ListenAndServe(websocketAddr, mux); err != nil {
-				logger.Error("Failed to start WebSocket server", zap.Error(err))
+			go func() {
+				logger.Info("Starting WebSocket server", zap.String("address", websocketAddr))
+				if err := http.ListenAndServe(websocketAddr, mux); err != nil {
+					logger.Error("Failed to start WebSocket server", zap.Error(err))
+				}
+			}()
+			
+			// Give WebSocket server time to start before starting gnet server
+			time.Sleep(100 * time.Millisecond)
+			
+			// Start gnet server for HTTP proxy
+			go func() {
+				logger.Info("Starting gnet HTTP server", zap.String("address", serverAddr))
+				if err := gnet.Run(proxyServer, "tcp://"+serverAddr,
+					gnet.WithMulticore(true),
+					gnet.WithReusePort(true),
+					gnet.WithTCPKeepAlive(time.Minute*2),
+					gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+					gnet.WithSocketRecvBuffer(64*1024),
+					gnet.WithSocketSendBuffer(64*1024),
+					gnet.WithReadBufferCap(16*1024),
+					gnet.WithWriteBufferCap(16*1024),
+					gnet.WithLockOSThread(true),
+				); err != nil {
+					logger.Fatal("Failed to start gnet server", zap.Error(err))
+				}
+			}()
+			
+			logger.Info("Reverse proxy servers started successfully", 
+				zap.String("http_address", serverAddr),
+				zap.String("websocket_address", websocketAddr))
+		}
+	} else {
+		// WebSocket disabled, use only gnet for HTTP
+		go func() {
+			if err := gnet.Run(proxyServer, "tcp://"+serverAddr,
+				gnet.WithMulticore(true),
+				gnet.WithReusePort(true),
+				gnet.WithTCPKeepAlive(time.Minute*2),
+				gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+				gnet.WithSocketRecvBuffer(64*1024),
+				gnet.WithSocketSendBuffer(64*1024),
+				gnet.WithReadBufferCap(16*1024),
+				gnet.WithWriteBufferCap(16*1024),
+				gnet.WithLockOSThread(true),
+			); err != nil {
+				logger.Fatal("Failed to start gnet server", zap.Error(err))
 			}
 		}()
+		
+		logger.Info("Reverse proxy server started successfully", zap.String("address", serverAddr))
 	}
 
-	go func() {
-		if err := gnet.Run(proxyServer, "tcp://"+serverAddr,
-			gnet.WithMulticore(true),
-			gnet.WithReusePort(true),
-			gnet.WithTCPKeepAlive(time.Minute*2),
-			gnet.WithTCPNoDelay(gnet.TCPNoDelay),
-			gnet.WithSocketRecvBuffer(64*1024), // 64KB receive buffer
-			gnet.WithSocketSendBuffer(64*1024), // 64KB send buffer
-			gnet.WithReadBufferCap(16*1024),    // 16KB read buffer per connection
-			gnet.WithWriteBufferCap(16*1024),   // 16KB write buffer per connection
-			gnet.WithLockOSThread(true),        // Lock OS threads for better performance
-		); err != nil {
-			logger.Fatal("Failed to start gnet server", zap.Error(err))
-		}
-	}()
 
-	logger.Info("Reverse proxy server started successfully",
-		zap.String("address", serverAddr))
 
 	// Wait for shutdown signal
 	<-sigChan

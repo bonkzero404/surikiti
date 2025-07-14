@@ -101,6 +101,77 @@ graph TB
 | **Logging** | Zap | Structured logging with rotation |
 | **Connection Pool** | fasthttp | Efficient connection reuse |
 
+### Server Startup Architecture
+
+Surikiti uses a sophisticated startup sequence to prevent race conditions and ensure reliable server initialization:
+
+#### Unified Server Mode (Same Port)
+```mermaid
+sequenceDiagram
+    participant Main as Main Process
+    participant HTTP as HTTP Server
+    participant WS as WebSocket Handler
+    participant Gnet as gnet Engine
+    
+    Main->>HTTP: Initialize unified server
+    Main->>WS: Register WebSocket handlers
+    Main->>HTTP: Start server on port 8086
+    HTTP->>Gnet: Use gnet for HTTP/1.1
+    HTTP->>WS: Handle WebSocket upgrades
+    Note over HTTP,WS: Single server handles both protocols
+```
+
+#### Separate Server Mode (Different Ports)
+```mermaid
+sequenceDiagram
+    participant Main as Main Process
+    participant WSServer as WebSocket Server
+    participant GnetServer as gnet HTTP Server
+    participant Sync as Synchronization
+    
+    Main->>WSServer: Initialize WebSocket server
+    Main->>WSServer: Start on port 8088 (goroutine)
+    WSServer->>Sync: Signal startup complete
+    Main->>Sync: Wait 100ms for WebSocket ready
+    Main->>GnetServer: Start gnet on port 8086 (goroutine)
+    Note over WSServer,GnetServer: Synchronized startup prevents conflicts
+```
+
+#### Race Condition Prevention
+
+**Problem Solved**: Previously, both servers attempted to bind simultaneously, causing "address already in use" errors.
+
+**Solution Implemented**:
+1. **Sequential Initialization**: WebSocket server setup moved outside goroutine
+2. **Startup Delay**: 100ms synchronization delay before gnet server starts
+3. **Improved Logging**: Clear startup sequence logging for debugging
+4. **Error Isolation**: Each server's errors are handled independently
+
+**Code Structure**:
+```go
+// Separate server mode startup sequence
+if websocketPort != httpPort {
+    // 1. Initialize WebSocket server components first
+    websocketAddr := cfg.Server.Host + ":" + strconv.Itoa(websocketPort)
+    mux := http.NewServeMux()
+    
+    // 2. Start WebSocket server in goroutine
+    go func() {
+        logger.Info("Starting WebSocket server", zap.String("address", websocketAddr))
+        http.ListenAndServe(websocketAddr, mux)
+    }()
+    
+    // 3. Synchronization delay
+    time.Sleep(100 * time.Millisecond)
+    
+    // 4. Start gnet server
+    go func() {
+        logger.Info("Starting gnet HTTP server", zap.String("address", serverAddr))
+        gnet.Run(proxyServer, "tcp://"+serverAddr, options...)
+    }()
+}
+```
+
 ## ✨ Features
 
 ### 🚀 High Performance
@@ -216,8 +287,9 @@ docker run -p 8080:8080 -v $(pwd)/config.toml:/app/config.toml surikiti-proxy
 
 ```toml
 [server]
-port = 8090              # HTTP/1.1 and WebSocket port
+port = 8086              # HTTP/1.1 port (gnet)
 https_port = 8443        # HTTP/2 and HTTP/3 port
+websocket_port = 8088    # WebSocket port (separate server recommended)
 host = "0.0.0.0"
 
 # Protocol support
@@ -232,7 +304,7 @@ cert_file = "server.crt" # TLS certificate file
 key_file = "server.key"  # TLS private key file
 auto_generate = true     # Auto-generate self-signed cert if files don't exist
 
-# Backend servers
+# HTTP Backend servers
 [[upstreams]]
 name = "backend1"
 url = "http://localhost:3001"
@@ -250,6 +322,13 @@ name = "backend3"
 url = "http://localhost:3003"
 weight = 2
 health_check = "/health"
+
+# WebSocket Backend servers
+[[websocket_upstreams]]
+name = "websocket_backend"
+url = "ws://localhost:3004"
+weight = 1
+health_check = "/ws/health"
 
 [load_balancer]
 method = "round_robin"  # round_robin, weighted_round_robin, least_connections, single
@@ -290,15 +369,25 @@ file = "proxy.log"
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `host` | string | "0.0.0.0" | Server bind address |
-| `port` | int | 8090 | Server listen port |
+| `port` | int | 8086 | HTTP/1.1 server listen port |
+| `https_port` | int | 8443 | HTTP/2 and HTTP/3 server port |
+| `websocket_port` | int | 8088 | WebSocket server port (separate mode) |
 
 #### Upstream Configuration
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | ✅ | Unique backend identifier |
-| `url` | string | ✅ | Backend server URL |
+| `url` | string | ✅ | Backend server URL (http:// or ws://) |
 | `weight` | int | ✅ | Load balancing weight |
 | `health_check` | string | ✅ | Health check endpoint path |
+
+#### WebSocket Upstream Configuration
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | ✅ | Unique WebSocket backend identifier |
+| `url` | string | ✅ | WebSocket backend URL (ws:// or wss://) |
+| `weight` | int | ✅ | Load balancing weight for WebSocket |
+| `health_check` | string | ✅ | WebSocket health check endpoint |
 
 #### Load Balancer Configuration
 | Parameter | Type | Default | Description |
@@ -580,26 +669,71 @@ curl --http3 -k https://localhost:8443/api/users
 - **Reduced head-of-line blocking**: Stream-level flow control
 
 ### WebSocket Support
-- **Port**: 8090 (same as HTTP/1.1)
+- **Port**: Configurable (8088 recommended for separate port mode)
 - **Features**:
   - Full-duplex communication
   - Real-time data exchange
   - Low latency messaging
   - Connection upgrade from HTTP
+  - Dual server mode support
 - **Limitations**: Partial support due to gnet constraints
 - **Use Cases**: Real-time applications, live updates
 
+#### WebSocket Configuration Modes
+
+**1. Unified Server Mode** (WebSocket + HTTP on same port):
+```toml
+[server]
+port = 8086
+websocket_port = 8086  # Same as HTTP port
+
+[protocols]
+websocket_enabled = true
+```
+
+**2. Separate Server Mode** (Recommended):
+```toml
+[server]
+port = 8086              # HTTP/1.1 with gnet
+websocket_port = 8088    # WebSocket with standard HTTP server
+
+[protocols]
+websocket_enabled = true
+```
+
+#### WebSocket Testing
+
 ```bash
-# WebSocket connection
+# WebSocket connection (separate port mode)
 npm install -g wscat
-wscat -c ws://localhost:8090/ws
+wscat -c ws://localhost:8088/ws
+
+# WebSocket connection (unified mode)
+wscat -c ws://localhost:8086/ws
 
 # WebSocket upgrade with curl
 curl -i -N -H "Connection: Upgrade" \
      -H "Upgrade: websocket" \
      -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
      -H "Sec-WebSocket-Version: 13" \
-     http://localhost:8090/ws
+     http://localhost:8088/ws
+```
+
+#### WebSocket Upstream Configuration
+
+```toml
+# WebSocket backend servers
+[[websocket_upstreams]]
+name = "websocket_backend1"
+url = "ws://localhost:3004"
+weight = 1
+health_check = "/ws/health"
+
+[[websocket_upstreams]]
+name = "websocket_backend2"
+url = "ws://localhost:3005"
+weight = 1
+health_check = "/ws/health"
 ```
 
 #### WebSocket Features
@@ -1196,7 +1330,7 @@ algorithm = "least_connections"
 5. **Test WebSocket**: `wscat -c ws://localhost:8090/ws`
 6. **Run Benchmarks**: `./scripts/simple-http2-test.sh`
 
-### 📈 Future Enhancements
+### 🚀 Future Enhancements
 
 #### Potential Improvements
 - 🔄 **Full WebSocket Support**: Complete gnet WebSocket implementation
@@ -1205,6 +1339,269 @@ algorithm = "least_connections"
 - 🛡️ **Rate Limiting**: Request rate limiting and throttling
 - 🔐 **Authentication**: JWT and OAuth2 support
 - 📱 **Admin Dashboard**: Web-based management interface
+
+---
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### 1. "bind: address already in use" Error
+
+**Problem**: Server fails to start with port binding error.
+
+**Symptoms**:
+```bash
+{"level":"FATAL","msg":"Failed to start gnet server","error":"bind: address already in use"}
+```
+
+**Solutions**:
+
+1. **Check for running processes**:
+   ```bash
+   # Check what's using the port
+   lsof -i :8086
+   
+   # Kill the process if needed
+   kill <PID>
+   ```
+
+2. **Race condition between servers** (Fixed in latest version):
+   - Issue occurred when WebSocket and HTTP servers started simultaneously
+   - **Solution**: Added startup synchronization with 100ms delay
+   - **Code fix**: Moved WebSocket server initialization outside goroutine
+
+3. **Port configuration conflicts**:
+   ```toml
+   [server]
+   port = 8086              # HTTP/1.1 port
+   websocket_port = 8088    # WebSocket port (must be different)
+   ```
+
+#### 2. "context deadline exceeded" Error
+
+**Problem**: Upstream requests timing out.
+
+**Symptoms**:
+```bash
+{"level":"ERROR","msg":"Upstream request failed","error":"context deadline exceeded"}
+```
+
+**Solutions**:
+
+1. **Increase timeout values**:
+   ```toml
+   [proxy]
+   request_timeout = "5s"     # Increased from 2s
+   response_timeout = "10s"   # Increased from 5s
+   ```
+
+2. **Optimize connection pooling**:
+   ```toml
+   [proxy]
+   max_idle_conns = 100
+   max_idle_conns_per_host = 20
+   max_conns_per_host = 100
+   idle_conn_timeout = "90s"
+   ```
+
+3. **Enable retry logic** (Built-in):
+   ```toml
+   [load_balancer]
+   max_retries = 3
+   timeout = "30s"
+   ```
+
+#### 3. HTTP/2 or HTTP/3 Not Working
+
+**Problem**: HTTPS protocols fail to start.
+
+**Symptoms**:
+```bash
+{"level":"ERROR","msg":"Failed to start HTTP/2 server","error":"listen tcp :8443: bind: address already in use"}
+```
+
+**Solutions**:
+
+1. **Check TLS certificate**:
+   ```bash
+   # Verify certificate files exist
+   ls -la server.crt server.key
+   
+   # Test certificate validity
+   openssl x509 -in server.crt -text -noout
+   ```
+
+2. **Enable auto-generation**:
+   ```toml
+   [tls]
+   cert_file = "server.crt"
+   key_file = "server.key"
+   auto_generate = true  # Auto-create if missing
+   ```
+
+3. **Check port availability**:
+   ```bash
+   # Check HTTPS port
+   lsof -i :8443
+   ```
+
+#### 4. WebSocket Connection Issues
+
+**Problem**: WebSocket connections fail or disconnect.
+
+**Symptoms**:
+- Connection refused
+- Unexpected disconnections
+- Upgrade failures
+
+**Solutions**:
+
+1. **Verify WebSocket configuration**:
+   ```toml
+   [protocols]
+   websocket_enabled = true
+   
+   [server]
+   websocket_port = 8088  # Separate port recommended
+   ```
+
+2. **Test WebSocket connectivity**:
+   ```bash
+   # Test WebSocket upgrade
+   curl -i -N -H "Connection: Upgrade" \
+        -H "Upgrade: websocket" \
+        -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
+        -H "Sec-WebSocket-Version: 13" \
+        http://localhost:8088/ws
+   ```
+
+3. **Check backend WebSocket support**:
+   ```bash
+   # Test backend directly
+   wscat -c ws://localhost:3004/ws
+   ```
+
+#### 5. High Memory Usage
+
+**Problem**: Memory consumption grows over time.
+
+**Solutions**:
+
+1. **Optimize buffer sizes**:
+   ```toml
+   [proxy]
+   buffer_size = 4096        # Reduce if memory constrained
+   max_body_size = 1048576   # 1MB limit
+   ```
+
+2. **Tune connection limits**:
+   ```toml
+   [proxy]
+   max_connections = 500     # Reduce for lower memory
+   max_idle_conns = 50
+   ```
+
+3. **Enable compression**:
+   ```toml
+   [proxy]
+   enable_compression = true  # Reduce bandwidth usage
+   ```
+
+### Performance Optimization
+
+#### 1. High-Concurrency Tuning
+
+```toml
+[proxy]
+max_connections = 2000
+max_conns_per_host = 200
+max_idle_conns = 200
+max_idle_conns_per_host = 50
+buffer_size = 8192
+keep_alive_timeout = "120s"
+```
+
+#### 2. Low-Latency Configuration
+
+```toml
+[proxy]
+request_timeout = "1s"
+response_timeout = "3s"
+buffer_size = 2048
+enable_compression = false  # Disable for lower latency
+```
+
+#### 3. Memory-Optimized Setup
+
+```toml
+[proxy]
+max_connections = 100
+max_body_size = 524288      # 512KB
+buffer_size = 2048
+max_idle_conns = 20
+```
+
+### Monitoring and Debugging
+
+#### 1. Enable Debug Logging
+
+```toml
+[logging]
+level = "debug"  # Detailed logging
+file = "debug.log"
+```
+
+#### 2. Monitor Key Metrics
+
+```bash
+# Request rate
+grep "Request proxied successfully" proxy.log | wc -l
+
+# Error rate
+grep "ERROR" proxy.log | wc -l
+
+# Average response time
+grep "duration_ms" proxy.log | jq -r '.duration_ms' | awk '{sum+=$1; count++} END {print "Avg:", sum/count "ms"}'
+
+# Backend health status
+grep "health check" proxy.log | tail -10
+```
+
+#### 3. Performance Profiling
+
+```bash
+# CPU profiling
+go tool pprof http://localhost:6060/debug/pprof/profile
+
+# Memory profiling
+go tool pprof http://localhost:6060/debug/pprof/heap
+
+# Goroutine analysis
+go tool pprof http://localhost:6060/debug/pprof/goroutine
+```
+
+### Recent Fixes and Improvements
+
+#### v1.2.0 - Race Condition Fix
+- **Issue**: "bind: address already in use" when WebSocket and HTTP ports differ
+- **Root Cause**: Race condition between WebSocket HTTP server and gnet server startup
+- **Solution**: Added startup synchronization with 100ms delay
+- **Impact**: Eliminated port binding conflicts in multi-server mode
+
+#### v1.1.0 - Timeout Optimization
+- **Issue**: "context deadline exceeded" errors under load
+- **Solution**: Implemented exponential backoff retry logic
+- **Improvements**: 
+  - Increased default timeouts
+  - Optimized connection pooling
+  - Added retry mechanism with backoff
+
+#### v1.0.0 - Initial Release
+- Multi-protocol support (HTTP/1.1, HTTP/2, HTTP/3, WebSocket)
+- High-performance architecture with gnet and fasthttp
+- Comprehensive load balancing algorithms
+- Auto-generated TLS certificates
 
 ---
 

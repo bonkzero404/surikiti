@@ -56,6 +56,34 @@ func NewLoadBalancer(upstreamConfigs []config.UpstreamConfig, lbConfig config.Lo
 	}, nil
 }
 
+// NewWebSocketLoadBalancer creates a new load balancer specifically for WebSocket upstreams
+func NewWebSocketLoadBalancer(wsUpstreamConfigs []config.UpstreamConfig, lbConfig config.LoadBalancerConfig) (*LoadBalancer, error) {
+	upstreams := make([]*Upstream, 0, len(wsUpstreamConfigs))
+
+	for _, uc := range wsUpstreamConfigs {
+		parsedURL, err := url.Parse(uc.URL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid WebSocket upstream URL %s: %w", uc.URL, err)
+		}
+
+		upstream := &Upstream{
+			Name:        uc.Name,
+			URL:         parsedURL,
+			Weight:      uc.Weight,
+			HealthCheck: uc.HealthCheck,
+			Healthy:     1, // assume healthy initially
+		}
+		upstreams = append(upstreams, upstream)
+	}
+
+	return &LoadBalancer{
+		upstreams: upstreams,
+		method:    lbConfig.Method,
+		timeout:   lbConfig.Timeout,
+		retries:   lbConfig.MaxRetries,
+	}, nil
+}
+
 func (lb *LoadBalancer) GetUpstream() *Upstream {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()

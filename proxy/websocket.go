@@ -15,17 +15,19 @@ import (
 )
 
 type WebSocketProxy struct {
-	loadBalancer *loadbalancer.LoadBalancer
-	logger       *zap.Logger
-	config       config.ProxyConfig
-	upgrader     websocket.Upgrader
+	loadBalancer   *loadbalancer.LoadBalancer
+	wsLoadBalancer *loadbalancer.LoadBalancer
+	logger         *zap.Logger
+	config         config.ProxyConfig
+	upgrader       websocket.Upgrader
 }
 
-func NewWebSocketProxy(lb *loadbalancer.LoadBalancer, logger *zap.Logger, cfg config.ProxyConfig) *WebSocketProxy {
+func NewWebSocketProxy(lb *loadbalancer.LoadBalancer, wsLB *loadbalancer.LoadBalancer, logger *zap.Logger, cfg config.ProxyConfig) *WebSocketProxy {
 	return &WebSocketProxy{
-		loadBalancer: lb,
-		logger:       logger,
-		config:       cfg,
+		loadBalancer:   lb,
+		wsLoadBalancer: wsLB,
+		logger:         logger,
+		config:         cfg,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  cfg.WebSocketBufferSize,
 			WriteBufferSize: cfg.WebSocketBufferSize,
@@ -46,8 +48,8 @@ func (ws *WebSocketProxy) IsWebSocketRequest(headers map[string]string) bool {
 }
 
 func (ws *WebSocketProxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) error {
-	// Get WebSocket-specific upstream server
-	upstream := ws.loadBalancer.GetUpstreamByName("websocket_backend")
+	// Get WebSocket-specific upstream server from dedicated WebSocket load balancer
+	upstream := ws.wsLoadBalancer.GetUpstream()
 	if upstream == nil {
 		ws.logger.Error("No healthy WebSocket upstream available")
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -55,8 +57,8 @@ func (ws *WebSocketProxy) HandleWebSocket(w http.ResponseWriter, r *http.Request
 	}
 
 	// Increment connection count
-	ws.loadBalancer.IncreaseConnections(upstream)
-	defer ws.loadBalancer.DecreaseConnections(upstream)
+	ws.wsLoadBalancer.IncreaseConnections(upstream)
+	defer ws.wsLoadBalancer.DecreaseConnections(upstream)
 
 	// Parse upstream URL
 	upstreamURL := upstream.URL

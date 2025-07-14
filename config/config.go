@@ -8,12 +8,13 @@ import (
 )
 
 type Config struct {
-	Server       ServerConfig       `mapstructure:"server"`
-	Upstreams    []UpstreamConfig   `mapstructure:"upstreams"`
-	LoadBalancer LoadBalancerConfig `mapstructure:"load_balancer"`
-	Logging      LoggingConfig      `mapstructure:"logging"`
-	Proxy        ProxyConfig        `mapstructure:"proxy"`
-	CORS         CORSConfig         `mapstructure:"cors"`
+	Server             ServerConfig         `mapstructure:"server"`
+	Upstreams          []UpstreamConfig     `mapstructure:"upstreams"`
+	WebSocketUpstreams []UpstreamConfig     `mapstructure:"websocket_upstreams"`
+	LoadBalancer       LoadBalancerConfig   `mapstructure:"load_balancer"`
+	Logging            LoggingConfig        `mapstructure:"logging"`
+	Proxy              ProxyConfig          `mapstructure:"proxy"`
+	CORS               CORSConfig           `mapstructure:"cors"`
 }
 
 type ServerConfig struct {
