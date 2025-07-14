@@ -204,7 +204,7 @@ docker run -p 8080:8080 -v $(pwd)/config.toml:/app/config.toml surikiti-proxy
 
 ```bash
 # Start test backends (optional)
-./start-backends.sh
+./scripts/start-backends.sh
 
 # Run proxy server
 ./surikiti -config config.toml
@@ -890,14 +890,11 @@ surikiti/
 │   ├── backend2.py        # Test backend server 2
 │   └── backend3.py        # Test backend server 3
 ├── scripts/
-│   ├── benchmark-http2.sh # HTTP/2 benchmark script
-│   ├── run-http2-benchmark.sh # Comprehensive HTTP/2 testing
-│   ├── simple-http2-test.sh   # Simple HTTP/2 vs HTTP/1.1 test
-│   ├── test-protocols.sh  # Multi-protocol testing script
-│   ├── wrk-http2-script.lua   # wrk Lua script for HTTP/2
-│   └── post-test.lua      # wrk Lua script for POST testing
+│   ├── generate-certs.sh  # TLS certificate generation script
+│   ├── start-backends.sh  # Backend startup script
+│   └── test-protocols.sh  # Multi-protocol testing script
 ├── config.toml            # Default configuration
-├── start-backends.sh      # Backend startup script
+
 ├── go.mod                 # Go module definition
 ├── go.sum                 # Go module checksums
 └── README.md              # This documentation
@@ -974,7 +971,7 @@ go test -bench=. ./...
 
 1. **Start test backends**:
    ```bash
-   ./start-backends.sh
+   ./scripts/start-backends.sh
    ```
 
 2. **Run proxy in development mode**:
@@ -1192,7 +1189,7 @@ algorithm = "least_connections"
 
 ### 🚀 Quick Start Summary
 
-1. **Start Backend Servers**: `./start-backends.sh`
+1. **Start Backend Servers**: `./scripts/start-backends.sh`
 2. **Run Surikiti Proxy**: `go run main.go`
 3. **Test HTTP/1.1**: `curl http://localhost:8090/`
 4. **Test HTTP/2**: `curl --http2 -k https://localhost:8443/`
