@@ -1691,7 +1691,29 @@ go tool pprof http://localhost:6060/debug/pprof/goroutine
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+Surikiti is licensed under the [Apache License 2.0](LICENSE).
+
+### Third-Party Licenses
+
+This project includes software from third parties:
+
+- **gnet** (github.com/panjf2000/gnet/v2) - Apache License 2.0
+- **fasthttp** (github.com/valyala/fasthttp) - MIT License
+- **gorilla/websocket** (github.com/gorilla/websocket) - BSD 2-Clause License
+- **quic-go** (github.com/quic-go/quic-go) - MIT License
+- **zap** (go.uber.org/zap) - MIT License
+- **viper** (github.com/spf13/viper) - MIT License
+- **lumberjack** (gopkg.in/natefinch/lumberjack.v2) - MIT License
+
+See [NOTICE](NOTICE) file for detailed copyright information.
+
+### Patent Grant
+
+The Apache License 2.0 includes an explicit patent grant, providing protection against patent litigation for users of this software.
+
+### Commercial Use
+
+This software can be used for commercial purposes under the terms of the Apache License 2.0. No additional permissions are required.
 
 ## 🙏 Acknowledgments
 

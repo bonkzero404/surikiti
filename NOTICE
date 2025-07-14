@@ -1,0 +1,46 @@
+Surikiti Proxy Server
+Copyright 2024 Surikiti Project
+
+This product includes software developed by third parties:
+
+================================================================================
+
+gnet (github.com/panjf2000/gnet/v2)
+Copyright (c) 2019 Andy Pan
+Licensed under the Apache License, Version 2.0
+
+================================================================================
+
+fasthttp (github.com/valyala/fasthttp)
+Copyright (c) 2015-present Aliaksandr Valialkin, VertaMedia
+Licensed under the MIT License
+
+================================================================================
+
+gorilla/websocket (github.com/gorilla/websocket)
+Copyright (c) 2013 The Gorilla WebSocket Authors
+Licensed under the BSD 2-Clause License
+
+================================================================================
+
+quic-go (github.com/quic-go/quic-go)
+Copyright (c) 2016 the quic-go authors & Google, Inc.
+Licensed under the MIT License
+
+================================================================================
+
+zap (go.uber.org/zap)
+Copyright (c) 2016-2017 Uber Technologies, Inc.
+Licensed under the MIT License
+
+================================================================================
+
+viper (github.com/spf13/viper)
+Copyright (c) 2014 Steve Francia
+Licensed under the MIT License
+
+================================================================================
+
+lumberjack (gopkg.in/natefinch/lumberjack.v2)
+Copyright (c) 2014 Nate Finch
+Licensed under the MIT License
