@@ -27,17 +27,25 @@ echo "Starting Backend Server 3 on port 3003..."
 python3 test-backends/backend3.py &
 BACKEND3_PID=$!
 
+echo "Starting WebSocket Backend on port 3004..."
+python3 test-backends/websocket_backend.py &
+WEBSOCKET_PID=$!
+
 # Wait a moment for servers to start
-sleep 2
+sleep 3
 
 echo "\nAll backend servers started!"
 echo "Backend 1: http://localhost:3001"
 echo "Backend 2: http://localhost:3002"
 echo "Backend 3: http://localhost:3003"
+echo "WebSocket Backend: ws://localhost:3004"
 echo "\nHealth check endpoints:"
 echo "Backend 1: http://localhost:3001/health"
 echo "Backend 2: http://localhost:3002/health"
 echo "Backend 3: http://localhost:3003/health"
+echo "\nWebSocket testing:"
+echo "wscat -c ws://localhost:3004"
+echo "Send: {\"type\": \"ping\", \"message\": \"hello\"}"
 echo "\nPress Ctrl+C to stop all servers"
 
 # Wait for all background processes

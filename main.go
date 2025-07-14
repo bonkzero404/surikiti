@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -70,6 +72,28 @@ func main() {
 			zap.String("name", upstream.Name),
 			zap.String("url", upstream.URL),
 			zap.Int("weight", upstream.Weight))
+	}
+
+	// Start WebSocket server if enabled
+	if cfg.Proxy.EnableWebSocket {
+		go func() {
+			websocketPort := cfg.Server.WebSocketPort
+			websocketAddr := cfg.Server.Host + ":" + strconv.Itoa(websocketPort)
+			
+			mux := http.NewServeMux()
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				if proxyServer.IsWebSocketRequest(r) {
+					proxyServer.HandleWebSocketHTTP(w, r)
+				} else {
+					http.Error(w, "WebSocket connections only", http.StatusBadRequest)
+				}
+			})
+			
+			logger.Info("Starting WebSocket server", zap.String("address", websocketAddr))
+			if err := http.ListenAndServe(websocketAddr, mux); err != nil {
+				logger.Error("Failed to start WebSocket server", zap.Error(err))
+			}
+		}()
 	}
 
 	go func() {

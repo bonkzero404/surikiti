@@ -46,10 +46,10 @@ func (ws *WebSocketProxy) IsWebSocketRequest(headers map[string]string) bool {
 }
 
 func (ws *WebSocketProxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) error {
-	// Get upstream server
-	upstream := ws.loadBalancer.GetUpstream()
+	// Get WebSocket-specific upstream server
+	upstream := ws.loadBalancer.GetUpstreamByName("websocket_backend")
 	if upstream == nil {
-		ws.logger.Error("No healthy upstream available for WebSocket")
+		ws.logger.Error("No healthy WebSocket upstream available")
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return nil
 	}
@@ -66,16 +66,28 @@ func (ws *WebSocketProxy) HandleWebSocket(w http.ResponseWriter, r *http.Request
 		return fmt.Errorf("invalid upstream URL: nil")
 	}
 
-	// Create WebSocket URL (ws:// or wss://)
-	scheme := "ws"
-	if upstreamURL.Scheme == "https" {
-		scheme = "wss"
-	}
-	upstreamWSURL := &url.URL{
-		Scheme: scheme,
-		Host:   upstreamURL.Host,
-		Path:   r.URL.Path,
-		RawQuery: r.URL.RawQuery,
+	// Use WebSocket URL directly or convert from HTTP
+	var upstreamWSURL *url.URL
+	if upstreamURL.Scheme == "ws" || upstreamURL.Scheme == "wss" {
+		// Use WebSocket URL directly
+		upstreamWSURL = &url.URL{
+			Scheme: upstreamURL.Scheme,
+			Host:   upstreamURL.Host,
+			Path:   r.URL.Path,
+			RawQuery: r.URL.RawQuery,
+		}
+	} else {
+		// Convert HTTP to WebSocket
+		scheme := "ws"
+		if upstreamURL.Scheme == "https" {
+			scheme = "wss"
+		}
+		upstreamWSURL = &url.URL{
+			Scheme: scheme,
+			Host:   upstreamURL.Host,
+			Path:   r.URL.Path,
+			RawQuery: r.URL.RawQuery,
+		}
 	}
 
 	// Upgrade client connection

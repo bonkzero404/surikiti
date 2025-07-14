@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -142,6 +143,36 @@ func (ps *ProxyServer) OnShutdown(eng gnet.Engine) {
 
 func (ps *ProxyServer) OnTick() (delay time.Duration, action gnet.Action) {
 	return time.Second, gnet.None
+}
+
+// IsWebSocketRequest checks if the HTTP request is a WebSocket upgrade request
+func (ps *ProxyServer) IsWebSocketRequest(r *http.Request) bool {
+	if ps.websocketProxy == nil {
+		return false
+	}
+	
+	headers := make(map[string]string)
+	for key, values := range r.Header {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+	
+	return ps.websocketProxy.IsWebSocketRequest(headers)
+}
+
+// HandleWebSocketHTTP handles WebSocket connections through standard HTTP server
+func (ps *ProxyServer) HandleWebSocketHTTP(w http.ResponseWriter, r *http.Request) {
+	if ps.websocketProxy == nil {
+		http.Error(w, "WebSocket proxy not initialized", http.StatusInternalServerError)
+		return
+	}
+	
+	err := ps.websocketProxy.HandleWebSocket(w, r)
+	if err != nil {
+		ps.logger.Error("WebSocket proxy error", zap.Error(err))
+		// Don't write error response here as HandleWebSocket may have already written to the connection
+	}
 }
 
 func (ps *ProxyServer) OnTraffic(c gnet.Conn) gnet.Action {

@@ -85,6 +85,19 @@ func (lb *LoadBalancer) GetUpstream() *Upstream {
 	}
 }
 
+// GetUpstreamByName returns a specific upstream by name if it's healthy
+func (lb *LoadBalancer) GetUpstreamByName(name string) *Upstream {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+
+	for _, upstream := range lb.upstreams {
+		if upstream.Name == name && atomic.LoadInt64(&upstream.Healthy) == 1 {
+			return upstream
+		}
+	}
+	return nil
+}
+
 func (lb *LoadBalancer) roundRobin(upstreams []*Upstream) *Upstream {
 	index := atomic.AddUint64(&lb.current, 1) % uint64(len(upstreams))
 	return upstreams[index]
@@ -168,6 +181,15 @@ func (lb *LoadBalancer) performHealthCheck() {
 
 	for _, upstream := range lb.upstreams {
 		go func(u *Upstream) {
+			// Skip health check for WebSocket upstreams or assume they're healthy
+			if u.URL.Scheme == "ws" || u.URL.Scheme == "wss" {
+				// For WebSocket upstreams, we assume they're healthy
+				// In a production environment, you might want to implement
+				// a WebSocket-specific health check
+				lb.MarkHealthy(u)
+				return
+			}
+			
 			healthURL := u.URL.String() + u.HealthCheck
 			resp, err := client.Get(healthURL)
 			if err != nil || resp.StatusCode != http.StatusOK {
