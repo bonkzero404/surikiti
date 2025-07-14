@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -183,16 +182,23 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 	engineSet := ps.engineSet
 	ps.mu.RUnlock()
 	
-	if engineSet && !reflect.ValueOf(engine).IsNil() {
+	if engineSet {
 		ps.logger.Info("Stopping gnet engine")
 		if err := engine.Stop(ctx); err != nil {
 			ps.logger.Error("Error stopping gnet engine", zap.Error(err))
 		}
 	}
 	
-	// Stop health checks
+	// Stop health checks safely
 	if ps.loadBalancer != nil {
-		ps.loadBalancer.StopHealthCheck()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					ps.logger.Warn("Recovered from panic during load balancer shutdown", zap.Any("panic", r))
+				}
+			}()
+			ps.loadBalancer.StopHealthCheck()
+		}()
 	}
 	
 	// Shutdown HTTP/2 and HTTP/3 servers

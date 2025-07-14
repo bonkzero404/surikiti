@@ -2,25 +2,54 @@ package config
 
 import (
 	"fmt"
+	"io/fs"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Server             ServerConfig         `mapstructure:"server"`
+	Servers            []ServerConfig       `mapstructure:"servers"`
 	Upstreams          []UpstreamConfig     `mapstructure:"upstreams"`
 	WebSocketUpstreams []UpstreamConfig     `mapstructure:"websocket_upstreams"`
 	LoadBalancer       LoadBalancerConfig   `mapstructure:"load_balancer"`
 	Logging            LoggingConfig        `mapstructure:"logging"`
 	Proxy              ProxyConfig          `mapstructure:"proxy"`
 	CORS               CORSConfig           `mapstructure:"cors"`
+	GlobalDefaults     *GlobalDefaults      `mapstructure:"global_defaults"`
+}
+
+// GlobalDefaults contains fallback configurations
+type GlobalDefaults struct {
+	LoadBalancer LoadBalancerConfig `mapstructure:"load_balancer"`
+	Logging      LoggingConfig      `mapstructure:"logging"`
+	Proxy        ProxyConfig        `mapstructure:"proxy"`
+	CORS         CORSConfig         `mapstructure:"cors"`
+}
+
+// ServerFileConfig represents a single server configuration file
+type ServerFileConfig struct {
+	Server       ServerConfig       `mapstructure:"server"`
+	LoadBalancer LoadBalancerConfig `mapstructure:"load_balancer"`
+	Logging      LoggingConfig      `mapstructure:"logging"`
+	Proxy        ProxyConfig        `mapstructure:"proxy"`
+	CORS         CORSConfig         `mapstructure:"cors"`
 }
 
 type ServerConfig struct {
-	Port          int    `mapstructure:"port"`
-	Host          string `mapstructure:"host"`
-	WebSocketPort int    `mapstructure:"websocket_port"`
+	Name          string              `mapstructure:"name"`
+	Port          int                 `mapstructure:"port"`
+	Host          string              `mapstructure:"host"`
+	WebSocketPort int                 `mapstructure:"websocket_port"`
+	Upstreams     []string            `mapstructure:"upstreams"`
+	Enabled       bool                `mapstructure:"enabled"`
+	// Per-server configurations (optional, falls back to global if not set)
+	LoadBalancer  *LoadBalancerConfig `mapstructure:"load_balancer,omitempty"`
+	Logging       *LoggingConfig      `mapstructure:"logging,omitempty"`
+	Proxy         *ProxyConfig        `mapstructure:"proxy,omitempty"`
+	CORS          *CORSConfig         `mapstructure:"cors,omitempty"`
 }
 
 type UpstreamConfig struct {
@@ -91,6 +120,202 @@ func LoadConfig(configPath string) (*Config, error) {
 	return &config, nil
 }
 
-func (c *Config) GetServerAddress() string {
-	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+// LoadMultiFileConfig loads configuration from multiple files
+// configDir should contain: global.toml and any number of server .toml files
+func LoadMultiFileConfig(configDir string) (*Config, error) {
+	// Load global configuration first
+	globalPath := filepath.Join(configDir, "global.toml")
+	globalViper := viper.New()
+	globalViper.SetConfigFile(globalPath)
+	globalViper.SetConfigType("toml")
+
+	if err := globalViper.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("failed to read global config file: %w", err)
+	}
+
+	var config Config
+	if err := globalViper.Unmarshal(&config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal global config: %w", err)
+	}
+
+	// Scan directory for all .toml files (except global.toml)
+	serverFiles, err := scanConfigDirectory(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan config directory: %w", err)
+	}
+
+	// Load individual server configurations
+	for _, serverFile := range serverFiles {
+		serverPath := filepath.Join(configDir, serverFile)
+		serverViper := viper.New()
+		serverViper.SetConfigFile(serverPath)
+		serverViper.SetConfigType("toml")
+
+		if err := serverViper.ReadInConfig(); err != nil {
+			// Skip if file doesn't exist or can't be read
+			continue
+		}
+
+		var serverConfig ServerFileConfig
+		if err := serverViper.Unmarshal(&serverConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal server config %s: %w", serverFile, err)
+		}
+
+		// Only add server if it's enabled
+		if !serverConfig.Server.Enabled {
+			continue
+		}
+
+		// Set per-server configurations
+		serverConfig.Server.LoadBalancer = &serverConfig.LoadBalancer
+		serverConfig.Server.Logging = &serverConfig.Logging
+		serverConfig.Server.Proxy = &serverConfig.Proxy
+		serverConfig.Server.CORS = &serverConfig.CORS
+
+		// Add server to config
+		config.Servers = append(config.Servers, serverConfig.Server)
+	}
+
+	// Use global defaults as fallback if they exist
+	if config.GlobalDefaults != nil {
+		config.LoadBalancer = config.GlobalDefaults.LoadBalancer
+		config.Logging = config.GlobalDefaults.Logging
+		config.Proxy = config.GlobalDefaults.Proxy
+		config.CORS = config.GlobalDefaults.CORS
+	}
+
+	return &config, nil
+}
+
+// scanConfigDirectory scans the config directory for all .toml files except global.toml
+func scanConfigDirectory(configDir string) ([]string, error) {
+	var serverFiles []string
+
+	err := filepath.WalkDir(configDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if d.IsDir() {
+			return nil
+		}
+
+		// Only process .toml files
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".toml") {
+			return nil
+		}
+
+		// Skip global.toml as it's handled separately
+		if d.Name() == "global.toml" {
+			return nil
+		}
+
+		// Add relative path from configDir
+		relPath, err := filepath.Rel(configDir, path)
+		if err != nil {
+			return err
+		}
+
+		serverFiles = append(serverFiles, relPath)
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return serverFiles, nil
+}
+
+func (c *Config) GetServerAddress(serverName string) string {
+	for _, server := range c.Servers {
+		if server.Name == serverName {
+			return fmt.Sprintf("%s:%d", server.Host, server.Port)
+		}
+	}
+	return ""
+}
+
+// GetEnabledServers returns only enabled servers
+func (c *Config) GetEnabledServers() []ServerConfig {
+	var enabled []ServerConfig
+	for _, server := range c.Servers {
+		if server.Enabled {
+			enabled = append(enabled, server)
+		}
+	}
+	return enabled
+}
+
+// GetUpstreamsByNames returns upstreams filtered by names
+func (c *Config) GetUpstreamsByNames(names []string) []UpstreamConfig {
+	var filtered []UpstreamConfig
+	nameMap := make(map[string]bool)
+	for _, name := range names {
+		nameMap[name] = true
+	}
+	
+	for _, upstream := range c.Upstreams {
+		if nameMap[upstream.Name] {
+			filtered = append(filtered, upstream)
+		}
+	}
+	return filtered
+}
+
+// GetWebSocketUpstreamsByNames returns websocket upstreams filtered by names
+func (c *Config) GetWebSocketUpstreamsByNames(names []string) []UpstreamConfig {
+	var filtered []UpstreamConfig
+	nameMap := make(map[string]bool)
+	for _, name := range names {
+		nameMap[name] = true
+	}
+	
+	for _, upstream := range c.WebSocketUpstreams {
+		if nameMap[upstream.Name] {
+			filtered = append(filtered, upstream)
+		}
+	}
+	return filtered
+}
+
+// GetLoadBalancerConfig returns load balancer config for a server (per-server or global)
+func (c *Config) GetLoadBalancerConfig(serverName string) LoadBalancerConfig {
+	for _, server := range c.Servers {
+		if server.Name == serverName && server.LoadBalancer != nil {
+			return *server.LoadBalancer
+		}
+	}
+	return c.LoadBalancer
+}
+
+// GetLoggingConfig returns logging config for a server (per-server or global)
+func (c *Config) GetLoggingConfig(serverName string) LoggingConfig {
+	for _, server := range c.Servers {
+		if server.Name == serverName && server.Logging != nil {
+			return *server.Logging
+		}
+	}
+	return c.Logging
+}
+
+// GetProxyConfig returns proxy config for a server (per-server or global)
+func (c *Config) GetProxyConfig(serverName string) ProxyConfig {
+	for _, server := range c.Servers {
+		if server.Name == serverName && server.Proxy != nil {
+			return *server.Proxy
+		}
+	}
+	return c.Proxy
+}
+
+// GetCORSConfig returns CORS config for a server (per-server or global)
+func (c *Config) GetCORSConfig(serverName string) CORSConfig {
+	for _, server := range c.Servers {
+		if server.Name == serverName && server.CORS != nil {
+			return *server.CORS
+		}
+	}
+	return c.CORS
 }

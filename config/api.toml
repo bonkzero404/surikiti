@@ -1,0 +1,41 @@
+# API Server Configuration
+[server]
+name = "api"
+host = "0.0.0.0"
+port = 9086
+enabled = true
+upstreams = ["backend1", "backend2"]
+
+# Load Balancer Configuration
+[load_balancer]
+method = "least_connections"
+timeout = "15s"
+retry_attempts = 2
+
+# Logging Configuration
+[logging]
+level = "debug"
+file = "logs/surikiti_api.log"
+
+# Proxy Configuration
+[proxy]
+max_body_size = 5242880  # 5MB in bytes
+request_timeout = "15s"
+response_timeout = "15s"
+keep_alive_timeout = "30s"
+max_idle_conns = 50
+max_idle_conns_per_host = 5
+max_conns_per_host = 25
+enable_compression = false
+enable_websocket = false
+websocket_timeout = "30s"
+websocket_buffer_size = 2048
+
+# CORS Configuration
+[cors]
+enabled = true
+allowed_origins = ["http://localhost:3001"]
+allowed_methods = ["GET", "POST", "PUT", "DELETE"]
+allowed_headers = ["Content-Type", "Authorization"]
+allow_credentials = false
+max_age = 1800

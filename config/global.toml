@@ -1,0 +1,75 @@
+# Global Configuration
+# This file contains upstream definitions and global settings
+
+# HTTP Upstream Servers
+[[upstreams]]
+name = "backend1"
+url = "http://localhost:3001"
+weight = 3
+health_check_path = "/health"
+health_check_interval = "30s"
+health_check_timeout = "5s"
+
+[[upstreams]]
+name = "backend2"
+url = "http://localhost:3002"
+weight = 1
+health_check_path = "/health"
+health_check_interval = "30s"
+health_check_timeout = "5s"
+
+[[upstreams]]
+name = "backend3"
+url = "http://localhost:3003"
+weight = 2
+health_check_path = "/health"
+health_check_interval = "30s"
+health_check_timeout = "5s"
+
+# WebSocket Upstream Servers
+[[websocket_upstreams]]
+name = "ws_backend1"
+url = "ws://localhost:8001"
+weight = 1
+health_check_interval = "30s"
+health_check_timeout = "5s"
+
+[[websocket_upstreams]]
+name = "ws_backend2"
+url = "ws://localhost:8002"
+weight = 1
+health_check_interval = "30s"
+health_check_timeout = "5s"
+
+# Global Default Settings (fallback when per-server config is not specified)
+[global_defaults]
+
+[global_defaults.load_balancer]
+method = "round_robin"
+timeout = "30s"
+retry_attempts = 3
+
+[global_defaults.logging]
+level = "info"
+file = "logs/surikiti.log"
+
+[global_defaults.proxy]
+max_body_size = 10485760  # 10MB in bytes
+request_timeout = "30s"
+response_timeout = "30s"
+keep_alive_timeout = "60s"
+max_idle_conns = 100
+max_idle_conns_per_host = 10
+max_conns_per_host = 50
+enable_compression = true
+enable_websocket = false
+websocket_timeout = "60s"
+websocket_buffer_size = 4096
+
+[global_defaults.cors]
+enabled = false
+allowed_origins = ["*"]
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+allowed_headers = ["Content-Type", "Authorization"]
+allow_credentials = false
+max_age = 3600
