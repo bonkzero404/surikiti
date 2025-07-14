@@ -135,7 +135,7 @@ sequenceDiagram
 
 #### Configuration File Structure
 ```
-config/
+examples/config/
 ├── main.toml      # Main HTTP server (port 8086)
 ├── api.toml       # API server (port 9086)
 ├── websocket.toml # WebSocket server (port 9087)
@@ -271,12 +271,31 @@ Transfer/sec:      3.27MB
 | **Keep-Alive Strategy** | 30% connection overhead reduction | Maintain persistent connections |
 | **Optimized Timeouts** | 20% faster error detection | Reduced wait times |
 
+## 📁 Project Structure
+
+```
+surikiti/
+├── cmd/              # CLI commands
+├── config/           # Configuration package
+├── examples/         # Example configs, backends, and scripts
+│   ├── config/       # Example TOML configurations
+│   ├── certs/        # TLS certificates for testing
+│   ├── scripts/      # Utility scripts
+│   └── test-backends/ # Test backend servers
+├── loadbalancer/     # Load balancing logic
+├── logger/           # Logging utilities
+├── proxy/            # Core proxy functionality
+├── server/           # Server management
+├── logs/             # Log files (created at runtime)
+└── main.go           # Application entry point
+```
+
 ## 📦 Installation
 
 ### Prerequisites
 - **Go 1.19+** for modern Go features
 - **Linux/macOS** for optimal gnet performance
-- **Python 3.8+** for test backends (optional)
+- **Python 3.8+** for test backends (optional, see [examples/](examples/))
 
 ### Build from Source
 
@@ -298,18 +317,58 @@ go build -o surikiti
 # Build Docker image
 docker build -t surikiti-proxy .
 
-# Run container
-docker run -p 8080:8080 -v $(pwd)/config.toml:/app/config.toml surikiti-proxy
+# Run container with example configs
+docker run -p 8086:8086 -p 9086:9086 -p 9087:9087 \
+  -v $(pwd)/examples/config:/app/config \
+  surikiti-proxy --configs /app/config
 ```
+
+## 🚀 Getting Started with Examples
+
+The `examples/` directory contains everything you need to quickly test Surikiti:
+
+### Quick Demo
+
+1. **Start test backends**:
+   ```bash
+   ./examples/scripts/start-backends.sh
+   ```
+
+2. **Run Surikiti with example configs**:
+   ```bash
+   ./surikiti --configs examples/config
+   ```
+
+3. **Test the setup**:
+   ```bash
+   # Test HTTP load balancing
+   curl http://localhost:8086/health
+   
+   # Test API server
+   curl http://localhost:9086/api/data
+   
+   # Test WebSocket (requires wscat)
+   wscat -c ws://localhost:9087
+   ```
+
+### What's Included
+
+- **Multi-server configuration** (HTTP, API, WebSocket)
+- **Test backend servers** (Python-based)
+- **TLS certificates** for HTTPS testing
+- **Utility scripts** for easy setup
+- **Comprehensive documentation**
+
+See [examples/README.md](examples/README.md) for detailed documentation.
 
 ### Quick Start
 
 ```bash
 # Start test backends (optional)
-./scripts/start-backends.sh
+./examples/scripts/start-backends.sh
 
-# Run proxy server
-./surikiti -config config.toml
+# Run proxy server with example config
+./surikiti --configs examples/config
 ```
 
 ## ⚙️ Configuration
@@ -331,9 +390,9 @@ websocket_enabled = true # Enable WebSocket support
 
 # TLS configuration (required for HTTP/2 and HTTP/3)
 [tls]
-cert_file = "server.crt" # TLS certificate file
-key_file = "server.key"  # TLS private key file
-auto_generate = true     # Auto-generate self-signed cert if files don't exist
+cert_file = "examples/certs/server.crt" # TLS certificate file
+key_file = "examples/certs/server.key"   # TLS private key file
+auto_generate = true                     # Auto-generate self-signed cert if files don't exist
 
 # HTTP Backend servers
 [[upstreams]]
