@@ -127,23 +127,21 @@ pkill -TERM surikiti # Shutdown by process name
 ### Benchmark Results
 
 ```bash
-# Load Testing dengan wrk
-wrk -t4 -c400 -d30s --latency http://localhost:8090
-
-# Expected Results (After Optimization)
-Running 30s test @ http://localhost:8090
+wrk -t4 -c400 -d30s --latency http://localhost:8086
+Running 30s test @ http://localhost:8086
   4 threads and 400 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     8.50ms   12.30ms  85.20ms   89.25%
-    Req/Sec     2.85k     0.95k    5.12k    68.75%
+    Latency    19.34ms   18.75ms 321.38ms   89.62%
+    Req/Sec     3.62k     1.22k    5.97k    68.61%
   Latency Distribution
-     50%    6.20ms
-     75%   11.40ms
-     90%   22.80ms
-     99%   48.50ms
-  342,450 requests in 30.08s, 98.5MB read
-Requests/sec:    11,385.20
-Transfer/sec:      3.27MB
+     50%   13.23ms
+     75%   15.07ms
+     90%   40.53ms
+     99%  103.10ms
+  431475 requests in 30.04s, 156.78MB read
+  Socket errors: connect 153, read 0, write 0, timeout 0
+Requests/sec:  14363.31
+Transfer/sec:      5.22MB
 ```
 
 ### Performance Optimizations
